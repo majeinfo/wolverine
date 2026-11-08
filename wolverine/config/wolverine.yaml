@@ -1,0 +1,152 @@
+# Wolverine configuration.
+
+# IP addresses and CIDR ranges that blocking actions must never act on: ssh
+# actions, and webhooks with use_allowlist. Alerts are still raised and the
+# other actions (email, notification webhooks) still run.
+# Add your own admin addresses, monitoring hosts, gateways...
+allowlist:
+  - 127.0.0.0/8
+  - ::1
+  # - 192.168.1.0/24
+
+# Where the position of every source (offset in a log file, cursor in the
+# journal) is saved, so that a restart resumes after the last line or entry
+# processed. start_at then only applies to a source the file does not know
+# yet. The directory is created if needed. Remove it to always start from
+# start_at.
+state_file: /var/lib/wolverine/state.json
+
+sources:
+  # A log file read line by line. Each line is parsed with "regexp"; its
+  # named groups fill the event:
+  #   timestamp                    parsed with timestamp_formats
+  #   pri                          syslog priority -> severity and facility
+  #   message                      the message (default: the whole line)
+  #   hostname, service, category, severity, source_ip, dest_ip, username,
+  #   action, status               the event fields of the same name
+  #   any other name               stored in the event's Fields
+  # Lines that do not match are kept as events with a parse_error field.
+  - id: messages
+    type: logfile
+    path: /var/log/messages
+    follow: true          # true: keep reading new lines (tail -F)
+    start_at: beginning    # or end (only new lines, requires follow)
+    # Traditional syslog ("Nov  8 10:12:01 host sshd[123]: msg") and
+    # RFC 3339 timestamps ("2026-11-08T10:12:01.123456+01:00 host ...").
+    regexp: '^(?:<(?P<pri>\d{1,3})>)?(?P<timestamp>[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\S+) (?P<hostname>\S+) (?:(?P<service>[^\s\[:]+)(?:\[(?P<pid>\d+)\])?: ?)?(?P<message>.*)$'
+    timestamp_formats: [rfc3164, rfc3339]  # or Go layouts, e.g. "02/Jan/2006:15:04:05 -0700"
+    # timezone: Europe/Paris   # for timestamps without one (default: local)
+    category: system
+
+  # The journal entries of a systemd service, read through the sd-journal
+  # API. The event fields come from the journal: timestamp, hostname,
+  # service (SYSLOG_IDENTIFIER, e.g. sshd-session), severity, facility, pid
+  # and unit. The journal only lets the service itself write entries for its
+  # unit, so other programs cannot forge them (unlike logger -t sshd in a log
+  # file).
+  # Reading the system journal requires root or membership in the
+  # systemd-journal, adm or wheel group.
+  # Do not enable it together with a log file that also receives the same
+  # service's messages: each attempt would be counted twice.
+  - id: sshd-journal
+    type: systemd-service
+    disabled: true
+    unit: sshd             # same as sshd.service
+    follow: true           # true: wait for new entries (journalctl -f)
+    start_at: end          # or beginning (the whole journal of the unit)
+    # Optional: applied to the message only, to extract more fields.
+    # regexp: '^Failed (?P<auth_method>\S+) for'
+    category: system
+
+actions:
+  # Send the alert by email. Set the addresses and remove "disabled" to use it.
+  - id: email-admin
+    type: email
+    disabled: true
+    smtp:
+      host: localhost
+      port: 25                  # STARTTLS is used when the server offers it
+      # username: wolverine
+      # password_env: WOLVERINE_SMTP_PASSWORD   # read from the environment
+      timeout: 30s
+    from: wolverine@localhost
+    to: [root@localhost]
+    max_events: 20              # log lines included in the mail
+
+  # Run a command on a remote host with the system ssh client (keys,
+  # ~/.ssh/config and known_hosts apply; it never prompts). Here: add the
+  # attacking IP to an ipset used by the firewall.
+  #
+  # Variables: AlertID, RuleID, Severity, Value (the rule's group_by value),
+  # SourceIP, Username, Hostname (from the last event of the alert). They are
+  # shell-quoted automatically, so do NOT put them inside quotes.
+  - id: block-ip
+    type: ssh
+    disabled: true
+    ssh:
+      host: firewall.example.com
+      port: 22
+      user: wolverine
+      identity_file: /etc/wolverine/id_ed25519
+      timeout: 30s
+    command: sudo ipset add wolverine-blocklist {{.SourceIP}} -exist
+
+  # POST the alert as JSON (same format as on stdout) to an HTTP endpoint.
+  # Network errors, 429 and 5xx are retried with an exponential backoff.
+  - id: webhook
+    type: webhook
+    disabled: true
+    webhook:
+      url: https://hooks.example.com/wolverine
+      headers:
+        X-Source: wolverine
+      headers_env:                       # values read from the environment
+        Authorization: WOLVERINE_WEBHOOK_TOKEN
+      timeout: 10s
+      retries: 2
+    max_events: 20
+    use_allowlist: false                 # true if the webhook blocks IPs
+
+  # Post a message to a Slack channel (incoming webhook). The webhook URL is
+  # a secret: it is read from the environment and never logged.
+  #
+  # body is a template. Variables: AlertID, RuleID, Severity, SeverityUpper,
+  # Message, Time, Value, SourceIP, Username, Hostname, Count, Events (list of
+  # log lines, at most max_events), MoreEvents. Values are escaped for use
+  # INSIDE JSON strings ("..."); escape: slack also neutralises Slack's
+  # <links>, <!channel> mentions and &.
+  - id: slack
+    type: webhook
+    disabled: true
+    webhook:
+      url_env: WOLVERINE_SLACK_WEBHOOK_URL
+      timeout: 10s
+      retries: 2
+      escape: slack
+      body: |
+        {
+          "text": ":rotating_light: *[{{.SeverityUpper}}] {{.Message}}*\nRule `{{.RuleID}}` on {{.Hostname}} at {{.Time}}\n```{{range .Events}}{{.}}\n{{end}}{{if .MoreEvents}}... {{.MoreEvents}} more{{end}}```"
+        }
+    max_events: 10
+
+rules:
+  # Repeated failed SSH logins from the same IP (brute force).
+  #
+  # Only "Failed <method> for ..." messages are counted (they carry an
+  # auth_method field): sshd also logs "Invalid user" and pam_unix
+  # "authentication failure" lines for the same attempt, which would count it
+  # two or three times.
+  - id: ssh-failed-logins-per-ip
+    type: threshold
+    description: Repeated failed SSH logins from the same IP
+    severity: high
+    match:
+      category: authentication
+      action: login
+      status: failure
+      has_fields: [auth_method]
+    group_by: SourceIP   # Event field name, or a key of Event.Fields
+    count: 5
+    window: 5m
+    suppress: 1h         # at most one alert per IP and per hour
+    actions: [email-admin, block-ip, webhook, slack]

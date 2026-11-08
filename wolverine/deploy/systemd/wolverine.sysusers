@@ -1,0 +1,3 @@
+# Creates the wolverine system user. Install as
+# /usr/lib/sysusers.d/wolverine.conf, then run systemd-sysusers.
+u wolverine - "Wolverine log analyzer" /var/lib/wolverine /usr/sbin/nologin

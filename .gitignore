@@ -1,0 +1,5 @@
+go/
+setenv.sh
+.vscode/
+pkg/
+bin/
