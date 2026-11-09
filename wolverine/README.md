@@ -60,6 +60,7 @@ bin/wolverine -config config/wolverine.yaml
 | Option | Meaning |
 |---|---|
 | `-config FILE` | configuration file (default `config/wolverine.yaml`) |
+| `-state FILE` | state file where the position of each source is saved; overrides `state_file` from the configuration. `-state none` disables it |
 | `-events FILE` | append every event, after parsing and enrichment, as a JSON line to FILE (`-` for stdout) |
 | `-v` | describe the configuration and what wolverine does (alerts, actions run, log rotations...) |
 | `-v -v` or `-vv` | debugging details: rule counters per IP, every unparsed line, each action started... |
@@ -79,12 +80,12 @@ To try a regexp or a rule on a log file without touching anything:
 1. Copy the configuration.
 2. In the copy:
    - set `follow: false` on the sources;
-   - set `disabled: true` on the actions;
-   - remove `state_file`.
-3. Run:
+   - set `disabled: true` on the actions.
+3. Run without the state file, so the test starts from `start_at` and
+   saves nothing:
 
 ```bash
-bin/wolverine -config test.yaml -events events.jsonl -v -v
+bin/wolverine -config test.yaml -state none -events events.jsonl -v -v
 ```
 
 `events.jsonl` then shows what each line became. Lines the regexp did not
@@ -403,6 +404,9 @@ When positions are saved:
 
 A corrupt state file stops wolverine at startup: delete it to start over
 from `start_at`.
+
+The `-state FILE` option overrides `state_file`, for example to keep a
+separate state for a test run. `-state none` disables it for one run.
 
 ## Install as a service
 

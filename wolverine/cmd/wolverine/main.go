@@ -9,6 +9,9 @@
 // parsing and enrichment, which helps to check the regexp of a source.
 // "-events -" writes them on stdout, mixed with the alerts.
 //
+// -state FILE overrides the state_file of the configuration (where the
+// position of each source is saved); "-state none" disables it.
+//
 // -v describes the configuration and what wolverine is doing on stderr;
 // -v -v (or -vv) adds debugging details.
 package main
@@ -31,6 +34,7 @@ func main() {
 	configPath := flag.String("config", "config/wolverine.yaml", "configuration file")
 	flag.Var(verbose.Flag{Step: 1}, "v", "verbose: describe the configuration and the activity (repeat for debug details)")
 	flag.Var(verbose.Flag{Step: 2}, "vv", "same as -v -v")
+	statePath := flag.String("state", "", "state `file` where the position of each source is saved, overriding state_file (\"none\": do not save positions)")
 	eventsPath := flag.String("events", "", "append every parsed event as a JSON line to this `file` (\"-\": stdout)")
 	flag.Parse()
 
@@ -43,6 +47,13 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatal(err)
+	}
+	switch *statePath {
+	case "":
+	case "none":
+		cfg.StateFile = ""
+	default:
+		cfg.StateFile = *statePath
 	}
 	eng, err := engine.New(cfg)
 	if err != nil {
