@@ -29,8 +29,11 @@ type Source struct {
 	Type     string `yaml:"type"`
 	Disabled bool   `yaml:"disabled"`
 
-	// logfile: the file to read.
-	Path string `yaml:"path"`
+	// logfile: the file to read, or the files of Directory whose names
+	// match FilenameRegexp.
+	Path           string `yaml:"path"`
+	Directory      string `yaml:"directory"`
+	FilenameRegexp string `yaml:"filename_regexp"`
 	// systemd-service: the service whose journal entries are read, e.g.
 	// "sshd" or "sshd.service".
 	Unit string `yaml:"unit"`

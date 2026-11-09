@@ -38,6 +38,24 @@ sources:
     # timezone: Europe/Paris   # for timestamps without one (default: local)
     category: system
 
+  # Instead of "path": every file of a directory whose name matches
+  # filename_regexp (matched against the name only, not recursive). New
+  # matching files are read when they appear; rotated files are tracked by
+  # inode, so a file renamed to another matching name is not read again.
+  # Compressed files (gzip, bzip2) are decompressed automatically and read
+  # once; a compressed copy of a file already read (logrotate's compress)
+  # continues where that file stopped instead of being read again.
+  # Each event gets the file name in Fields.file.
+  # - id: nginx
+  #   type: logfile
+  #   directory: /var/log/nginx
+  #   filename_regexp: '^.*access\.log$'
+  #   follow: true
+  #   start_at: end
+  #   regexp: '^(?P<source_ip>\S+) \S+ (?P<username>\S+) \[(?P<timestamp>[^\]]+)\] "(?P<method>\S+) (?P<path>\S+)[^"]*" (?P<status>\d{3}) .*$'
+  #   timestamp_formats: ["02/Jan/2006:15:04:05 -0700"]
+  #   category: web
+
   # The journal entries of a systemd service, read through the sd-journal
   # API. The event fields come from the journal: timestamp, hostname,
   # service (SYSLOG_IDENTIFIER, e.g. sshd-session), severity, facility, pid

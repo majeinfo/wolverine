@@ -51,8 +51,8 @@ func buildSource(c config.Source) (*input, error) {
 		return buildLogfile(c)
 	case "systemd-service":
 		switch {
-		case c.Path != "":
-			return nil, errors.New("path does not apply to a systemd-service source")
+		case c.Path != "" || c.Directory != "" || c.FilenameRegexp != "":
+			return nil, errors.New("path, directory and filename_regexp do not apply to a systemd-service source")
 		case len(c.TimestampFormats) > 0:
 			return nil, errors.New("timestamp_formats does not apply to a systemd-service source (the journal timestamps are used)")
 		case c.Timezone != "":
@@ -67,8 +67,23 @@ func buildSource(c config.Source) (*input, error) {
 }
 
 func buildLogfile(c config.Source) (*input, error) {
-	if c.Path == "" {
-		return nil, fmt.Errorf("path is required")
+	src := &syslog.Files{ID: c.ID, Path: c.Path, Dir: c.Directory, Follow: c.Follow}
+	switch {
+	case c.Path != "" && (c.Directory != "" || c.FilenameRegexp != ""):
+		return nil, errors.New("set either path, or directory and filename_regexp")
+	case c.Path != "":
+	case c.Directory == "" && c.FilenameRegexp == "":
+		return nil, errors.New("path is required (or directory and filename_regexp)")
+	case c.Directory == "":
+		return nil, errors.New("filename_regexp requires directory")
+	case c.FilenameRegexp == "":
+		return nil, errors.New("directory requires filename_regexp")
+	default:
+		re, err := regexp.Compile(c.FilenameRegexp)
+		if err != nil {
+			return nil, fmt.Errorf("filename_regexp: %w", err)
+		}
+		src.Pattern = re
 	}
 
 	startAtEnd, err := startAt(c)
@@ -94,6 +109,8 @@ func buildLogfile(c config.Source) (*input, error) {
 		}
 	}
 
+	src.StartAtEnd = startAtEnd
+
 	loc := time.Local
 	if c.Timezone != "" {
 		if loc, err = time.LoadLocation(c.Timezone); err != nil {
@@ -102,12 +119,7 @@ func buildLogfile(c config.Source) (*input, error) {
 	}
 
 	return &input{
-		source: &syslog.File{
-			ID:         c.ID,
-			Path:       c.Path,
-			Follow:     c.Follow,
-			StartAtEnd: startAtEnd,
-		},
+		source: src,
 		parser: &syslog.Parser{
 			Regexp:           re,
 			Category:         category(c),

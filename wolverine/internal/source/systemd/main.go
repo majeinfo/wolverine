@@ -52,7 +52,7 @@ type Journal struct {
 	j      *sdjournal.Journal
 	read   int
 	resume Position // where the previous run stopped
-	start  any      // where Open positioned the journal, for Position()
+	start  any      // where Open positioned the journal, for Positions()
 }
 
 // Position is where a Journal stopped: after the entry Cursor, or, when the
@@ -64,11 +64,21 @@ type Position struct {
 
 func (s *Journal) Name() string { return s.ID }
 
-func (s *Journal) Resume(position json.RawMessage) error {
-	return json.Unmarshal(position, &s.resume)
+// Resume takes the position saved under the key "": the journal is a single
+// stream.
+func (s *Journal) Resume(positions map[string]json.RawMessage) error {
+	if p, ok := positions[""]; ok {
+		return json.Unmarshal(p, &s.resume)
+	}
+	return nil
 }
 
-func (s *Journal) Position() (any, error) { return s.start, nil }
+func (s *Journal) Positions() (map[string]any, error) {
+	if s.start == nil {
+		return nil, nil
+	}
+	return map[string]any{"": s.start}, nil
+}
 
 func (s *Journal) Open(ctx context.Context) error {
 	j, err := sdjournal.NewJournal()

@@ -121,7 +121,7 @@ func TestParseCustomFormat(t *testing.T) {
 	}
 }
 
-func readAll(t *testing.T, s *File) []string {
+func readAll(t *testing.T, s *Files) []string {
 	t.Helper()
 	var lines []string
 	for {
@@ -132,6 +132,9 @@ func readAll(t *testing.T, s *File) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if r.Data == nil {
+			continue
+		}
 		lines = append(lines, string(r.Data))
 	}
 }
@@ -140,7 +143,7 @@ func TestFileRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages")
 	os.WriteFile(path, []byte("line 1\nline 2\r\n\nlast line without newline"), 0o644)
 
-	s := &File{ID: "messages", Path: path}
+	s := &Files{ID: "messages", Path: path}
 	if err := s.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +161,7 @@ func TestFileRead(t *testing.T) {
 }
 
 func TestFileOpenMissing(t *testing.T) {
-	s := &File{Path: filepath.Join(t.TempDir(), "nope")}
+	s := &Files{Path: filepath.Join(t.TempDir(), "nope")}
 	if err := s.Open(context.Background()); err == nil {
 		t.Fatal("expected an error")
 	}
@@ -172,7 +175,7 @@ func TestFileFollow(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	s := &File{ID: "messages", Path: path, Follow: true, StartAtEnd: true, Poll: 10 * time.Millisecond}
+	s := &Files{ID: "messages", Path: path, Follow: true, StartAtEnd: true, Poll: 10 * time.Millisecond}
 	if err := s.Open(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +189,9 @@ func TestFileFollow(t *testing.T) {
 				close(lines)
 				return
 			}
-			lines <- string(r.Data)
+			if r.Data != nil {
+				lines <- string(r.Data)
+			}
 		}
 	}()
 	expect := func(want string) {

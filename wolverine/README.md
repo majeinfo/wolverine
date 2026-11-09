@@ -121,7 +121,7 @@ Every source has an `id`, a `type`, `follow` and `start_at`:
 When the [state file](#state-file) knows a source, its saved position is used
 instead of `start_at`.
 
-#### `logfile`: a log file
+#### `logfile`: log files
 
 ```yaml
 - id: messages
@@ -156,6 +156,57 @@ named groups `(?P<name>...)` fill the event:
 
 Lines that do not match the regexp are kept as events with a `parse_error`
 field. The first 10 are logged; with `-v -v`, all of them are.
+
+Every event gets the name of the file it comes from in `Fields.file`.
+
+Instead of `path`, a source can read every file of a directory whose name
+matches a regexp, for example the logs of all the virtual hosts of a web
+server:
+
+```yaml
+- id: nginx
+  type: logfile
+  directory: /var/log/nginx
+  filename_regexp: '^.*access\.log$'   # matched against the file name only
+  follow: true
+  regexp: '...'
+```
+
+- **Matching:** `filename_regexp` is a Go regexp matched against the file
+  name, not the full path. Use `^` and `$` to match the whole name. The
+  directory is not searched recursively. Subdirectories and non-regular
+  files are ignored.
+- **New files:** while following, files that appear later and match are
+  read from their beginning.
+- **Rotation:** files are tracked by inode, not by name.
+  - A file renamed to another matching name (`access.log` ->
+    `access.log-20261108`) is not read again.
+  - A file renamed to a name that no longer matches, or deleted, is read to
+    its end, then dropped. Its last lines come before those of the file that
+    replaced it.
+- **No matching file** at startup is not an error, unlike a missing `path`.
+
+**Compressed files** (gzip and bzip2) are decompressed automatically. They
+are recognized by their content, not their extension, with `path` as well
+as with `filename_regexp`.
+
+- **Read once:** a compressed file does not grow, so it is read to its end
+  and then remembered as done. A restart does not decompress it again.
+- **Rotated and compressed files are not read twice.** logrotate replaces
+  `messages-20261108` with `messages-20261108.gz`, a new file with the same
+  lines. When the first 1 KB of a compressed file, once decompressed, is
+  the same as a file already read, it is that file:
+  - if that file is still being read, the compressed copy is skipped;
+  - otherwise reading continues in the compressed copy where that file
+    stopped. This also works when the rotation and compression happened
+    while wolverine was stopped, even if the compressed name does not match
+    `filename_regexp`.
+- **History:** to read older rotations once, let `filename_regexp` match
+  them, for example `'^secure(-\d{8})?(\.gz)?$'` with
+  `start_at: beginning`. With `start_at: end`, the compressed files present
+  at the first run are skipped.
+- **Other formats** (xz, zstd) are read as plain text: make sure
+  `filename_regexp` does not match them.
 
 Log rotation (rename or copytruncate) is handled while following, and also
 while wolverine is stopped (see [State file](#state-file)).
@@ -389,11 +440,16 @@ reads everything again or skips what was written while wolverine was
 stopped. With one, wolverine saves the position of every source and a
 restart resumes after the last line or entry processed:
 
-- **Log files** are identified by inode and a checksum of their first 1 KB.
-  If a file was rotated while wolverine was stopped, wolverine finishes the
-  rotated file (`messages-20261108`, `messages.1`), then reads the new one.
-  If the old file is gone (compressed, deleted) or was truncated, the current
-  file is read from the beginning.
+- **Log files** have one position per file, identified by inode and a
+  checksum of its first 1 KB.
+  - If a file was rotated while wolverine was stopped, wolverine finishes the
+    rotated file (`messages-20261108`, `messages.1`), then reads the new one.
+  - If it was also compressed, wolverine finishes it from the compressed
+    copy (see [compressed files](#logfile-log-files)).
+  - If the old file is gone (deleted) or was truncated, the current file is
+    read from the beginning.
+  - Files that appeared while wolverine was stopped are read entirely:
+    `start_at` only applies to the first run of a source.
 - **Journal sources** resume after the cursor of the last entry processed.
 
 When positions are saved:

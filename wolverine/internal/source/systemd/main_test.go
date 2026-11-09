@@ -175,7 +175,8 @@ func TestResume(t *testing.T) {
 	}
 	got := readCursors(t, s, 2)
 	s.Close()
-	pos, _ := json.Marshal(Position{Cursor: got[1]})
+	raw, _ := json.Marshal(Position{Cursor: got[1]})
+	pos := map[string]json.RawMessage{"": raw}
 
 	// Resumes after the second entry, even with StartAtEnd.
 	s = &Journal{ID: "x", Unit: unit, StartAtEnd: true}
@@ -193,7 +194,7 @@ func TestResume(t *testing.T) {
 
 	// An invalid cursor is ignored: start_at applies.
 	s = &Journal{ID: "x", Unit: unit}
-	s.Resume(json.RawMessage(`{"cursor": "garbage"}`))
+	s.Resume(map[string]json.RawMessage{"": json.RawMessage(`{"cursor": "garbage"}`)})
 	if err := s.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +210,7 @@ func TestStartPosition(t *testing.T) {
 	if err := s.Open(context.Background()); err != nil {
 		t.Skipf("journal not available: %v", err)
 	}
-	pos, _ := s.Position()
+	pos := startPosition(s)
 	s.Close()
 	if p, ok := pos.(Position); !ok || p.Cursor != "" || p.Since == 0 {
 		t.Errorf("got %#v, want a Since position", pos)
@@ -228,7 +229,7 @@ func TestStartPosition(t *testing.T) {
 	if err := s.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	pos, _ = s.Position()
+	pos = startPosition(s)
 	s.Close()
 	if p, ok := pos.(Position); !ok || p.Cursor != all[len(all)-1] {
 		t.Errorf("got %#v, want the cursor of the last entry", pos)
@@ -237,9 +238,15 @@ func TestStartPosition(t *testing.T) {
 	// From the beginning there is nothing to save.
 	s = &Journal{ID: "x", Unit: unit}
 	s.Open(context.Background())
-	pos, _ = s.Position()
+	pos = startPosition(s)
 	s.Close()
 	if pos != nil {
 		t.Errorf("got %#v, want nil", pos)
 	}
+}
+
+// startPosition returns the single position given by Positions, or nil.
+func startPosition(s *Journal) any {
+	m, _ := s.Positions()
+	return m[""]
 }

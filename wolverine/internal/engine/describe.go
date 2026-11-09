@@ -26,6 +26,9 @@ func describe(cfg *config.Config) {
 			startAt = "beginning"
 		}
 		target := s.Path
+		if s.Directory != "" {
+			target = fmt.Sprintf("%s (files matching %s)", s.Directory, s.FilenameRegexp)
+		}
 		if s.Type == "systemd-service" {
 			target = "unit " + systemdUnitName(s.Unit)
 		}

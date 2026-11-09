@@ -48,7 +48,7 @@ func TestBuildSystemdServiceErrors(t *testing.T) {
 	}{
 		{"no unit", func(c *config.Source) { c.Unit = "" }, "unit is required"},
 		{"match injection", func(c *config.Source) { c.Unit = "x _UID=0" }, "invalid unit name"},
-		{"path", func(c *config.Source) { c.Path = "/var/log/messages" }, "path does not apply"},
+		{"path", func(c *config.Source) { c.Path = "/var/log/messages" }, "path, directory and filename_regexp do not apply"},
 		{"timestamp_formats", func(c *config.Source) { c.TimestampFormats = []string{"rfc3164"} }, "timestamp_formats does not apply"},
 		{"timezone", func(c *config.Source) { c.Timezone = "UTC" }, "timezone does not apply"},
 		{"end without follow", func(c *config.Source) { c.StartAt = "end" }, "requires follow"},

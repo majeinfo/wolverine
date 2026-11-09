@@ -94,7 +94,7 @@ func New(cfg *config.Config) (*Engine, error) {
 	return e, nil
 }
 
-// resume gives each source its saved position.
+// resume gives each source its saved positions.
 func (e *Engine) resume() error {
 	for _, in := range e.inputs {
 		r, ok := in.source.(source.Resumer)
@@ -117,11 +117,17 @@ func (e *Engine) resume() error {
 // keep coming. It is also written when Run returns.
 const stateSaveInterval = 5 * time.Second
 
-// item is a record read from a source, once parsed.
+// item is a record read from a source, once parsed, or a change of the
+// source's positions.
 type item struct {
 	in       *input
-	ev       *event.Event // nil for an empty line
+	ev       *event.Event // nil for an empty line or a change of positions
+	key      string
 	position any
+	forget   []string
+	// start, when set, replaces all the positions of the source: where it
+	// starts, given right after Open.
+	start map[string]any
 }
 
 // Run reads every source until they are all exhausted (sources that follow
@@ -220,11 +226,20 @@ loop:
 }
 
 func (e *Engine) setPosition(it item) {
-	if e.state == nil || it.position == nil {
+	if e.state == nil {
 		return
 	}
-	if err := e.state.Set(it.in.source.Name(), it.in.typ, it.position); err != nil {
-		log.Printf("source %s: position: %v", it.in.source.Name(), err)
+	id := it.in.source.Name()
+	var err error
+	if it.start != nil {
+		err = e.state.Replace(id, it.in.typ, it.start)
+	}
+	e.state.Delete(id, it.forget...)
+	if it.position != nil && err == nil {
+		err = e.state.Set(id, it.in.typ, it.key, it.position)
+	}
+	if err != nil {
+		log.Printf("source %s: position: %v", id, err)
 	}
 }
 
@@ -248,18 +263,20 @@ func (e *Engine) read(ctx context.Context, in *input, events chan<- item) error 
 	defer in.source.Close()
 
 	// Save where the source starts, in case nothing is read before the
-	// next restart.
+	// next restart. This also drops the saved positions that no longer
+	// apply (log files gone).
 	if r, ok := in.source.(source.Resumer); ok {
-		pos, err := r.Position()
+		start, err := r.Positions()
 		if err != nil {
 			return err
 		}
-		if pos != nil {
-			select {
-			case events <- item{in: in, position: pos}:
-			case <-ctx.Done():
-				return nil
-			}
+		if start == nil {
+			start = map[string]any{}
+		}
+		select {
+		case events <- item{in: in, start: start}:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 
@@ -271,8 +288,17 @@ func (e *Engine) read(ctx context.Context, in *input, events chan<- item) error 
 		if err != nil {
 			return err
 		}
+		if rec.Data == nil {
+			// No line: only a change of positions.
+			select {
+			case events <- item{in: in, forget: rec.Forget, key: rec.PositionKey, position: rec.Position}:
+			case <-ctx.Done():
+				return nil
+			}
+			continue
+		}
 		n := in.lines.Add(1)
-		it := item{in: in, position: rec.Position}
+		it := item{in: in, key: rec.PositionKey, position: rec.Position}
 		if len(rec.Data) > 0 {
 			ev, err := in.parser.Parse(rec)
 			if err != nil {

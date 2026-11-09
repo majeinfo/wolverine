@@ -12,6 +12,7 @@ import (
 
 	"wolverine/internal/config"
 	"wolverine/internal/event"
+	"wolverine/internal/source/syslog"
 )
 
 // The shipped configuration, with its source pointed at a test file, must
@@ -32,9 +33,16 @@ func TestRunShippedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Sources[0].Path = path
-	cfg.Sources[0].Follow = false
-	cfg.Sources[0].StartAt = ""
+	// Only the log file source: the others (journal) depend on the machine
+	// and may follow forever.
+	var messages config.Source
+	for _, src := range cfg.Sources {
+		if src.ID == "messages" {
+			messages = src
+		}
+	}
+	messages.Path, messages.Follow, messages.StartAt, messages.Disabled = path, false, "", false
+	cfg.Sources = []config.Source{messages}
 	cfg.StateFile = ""
 
 	eng, err := New(cfg)
@@ -174,5 +182,74 @@ func TestRunResume(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"type": "logfile"`) || !strings.Contains(string(b), `"offset": 14`) {
 		t.Errorf("unexpected state file:\n%s", b)
+	}
+}
+
+func TestBuildLogfileDirectory(t *testing.T) {
+	c := config.Source{ID: "web", Type: "logfile", Directory: "/var/log/nginx", FilenameRegexp: `access\.log$`, Regexp: `^(?P<message>.*)$`}
+	inputs, err := buildSources([]config.Source{c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := inputs[0].source.(*syslog.Files)
+	if f.Dir != "/var/log/nginx" || f.Pattern.String() != `access\.log$` || f.Path != "" {
+		t.Errorf("unexpected source: %+v", f)
+	}
+
+	tests := []struct {
+		mod  func(*config.Source)
+		want string
+	}{
+		{func(c *config.Source) { c.Path = "/var/log/messages" }, "either path, or directory"},
+		{func(c *config.Source) { c.FilenameRegexp = "" }, "directory requires filename_regexp"},
+		{func(c *config.Source) { c.Directory = "" }, "filename_regexp requires directory"},
+		{func(c *config.Source) { c.FilenameRegexp = "(" }, "filename_regexp:"},
+	}
+	for _, tt := range tests {
+		c := c
+		tt.mod(&c)
+		if _, err := buildSources([]config.Source{c}); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("got error %v, want it to contain %q", err, tt.want)
+		}
+	}
+}
+
+// Two files of a directory, then a third one appearing between two runs.
+func TestRunDirectory(t *testing.T) {
+	dir := t.TempDir()
+	logs := filepath.Join(dir, "logs")
+	os.Mkdir(logs, 0o755)
+	os.WriteFile(filepath.Join(logs, "a.log"), []byte("a1\na2\n"), 0o644)
+	os.WriteFile(filepath.Join(logs, "b.log"), []byte("b1\n"), 0o644)
+	os.WriteFile(filepath.Join(logs, "notes.txt"), []byte("x\n"), 0o644)
+	cfg := &config.Config{
+		StateFile: filepath.Join(dir, "state.json"),
+		Sources: []config.Source{{ID: "app", Type: "logfile", Directory: logs, FilenameRegexp: `\.log$`,
+			Regexp: `^(?P<message>.*)$`}},
+	}
+	run := func() (int64, string) {
+		t.Helper()
+		eng, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var events bytes.Buffer
+		eng.Events = &events
+		if err := eng.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return eng.inputs[0].lines.Load(), events.String()
+	}
+
+	n, events := run()
+	if n != 3 || !strings.Contains(events, `"file":"`+filepath.Join(logs, "a.log")+`"`) {
+		t.Fatalf("first run: %d lines, want 3; events:\n%s", n, events)
+	}
+	os.WriteFile(filepath.Join(logs, "c.log"), []byte("c1\n"), 0o644)
+	if n, _ := run(); n != 1 {
+		t.Fatalf("second run: %d lines, want 1 (c.log)", n)
+	}
+	if n, _ := run(); n != 0 {
+		t.Fatalf("third run: %d lines, want 0", n)
 	}
 }
