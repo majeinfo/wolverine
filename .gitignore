@@ -3,3 +3,4 @@ setenv.sh
 .vscode/
 pkg/
 bin/
+claude*
