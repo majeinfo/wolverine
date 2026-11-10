@@ -36,7 +36,9 @@ sources:
   # Lines that do not match are kept as events with a parse_error field.
   - id: messages
     type: logfile
-    path: /var/log/messages
+    #path: /var/log/messages
+    directory: /var/log
+    filename_regexp: '^messages|secure$'
     follow: true          # true: keep reading new lines (tail -F)
     start_at: beginning    # or end (only new lines, requires follow)
     # Traditional syslog ("Nov  8 10:12:01 host sshd[123]: msg") and
@@ -76,13 +78,14 @@ sources:
   # service's messages: each attempt would be counted twice.
   - id: sshd-journal
     type: systemd-service
-    disabled: true
+    disabled: false
     unit: sshd             # same as sshd.service
     follow: true           # true: wait for new entries (journalctl -f)
     start_at: end          # or beginning (the whole journal of the unit)
     # Optional: applied to the message only, to extract more fields.
     # regexp: '^Failed (?P<auth_method>\S+) for'
-    category: system
+    #regexp: 'invalid user <user>'
+    category: authentication
 
 actions:
   # Send the alert by email. Set the addresses and remove "disabled" to use it.
@@ -168,11 +171,11 @@ rules:
     severity: high
     match:
       category: authentication
-      action: login
-      status: failure
-      has_fields: [auth_method]
+      #action: login
+      #status: failure
+      #has_fields: [auth_method]
     group_by: SourceIP   # Event field name, or a key of Event.Fields
-    count: 5
+    count: 3
     window: 5m
     suppress: 1h         # at most one alert per IP and per hour
     actions: [email-admin, block-ip, webhook, slack]

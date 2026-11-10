@@ -24,8 +24,13 @@ func TestRunShippedConfig(t *testing.T) {
 		fmt.Fprintf(&log, "Nov  8 10:0%d:00 myhost sshd[%d]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.7  user=root\n", i, i)
 	}
 	log.WriteString("garbage line\n")
-	path := filepath.Join(t.TempDir(), "messages")
-	if err := os.WriteFile(path, []byte(log.String()), 0o644); err != nil {
+	// The source reads the files of a directory whose names match its
+	// filename_regexp: "messages" does, "boot.log" does not.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "messages"), []byte(log.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "boot.log"), []byte("Nov  8 10:00:00 myhost kernel: ignored\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -41,7 +46,10 @@ func TestRunShippedConfig(t *testing.T) {
 			messages = src
 		}
 	}
-	messages.Path, messages.Follow, messages.StartAt, messages.Disabled = path, false, "", false
+	if messages.Directory == "" || messages.FilenameRegexp == "" {
+		t.Fatalf("the messages source should use directory and filename_regexp: %+v", messages)
+	}
+	messages.Directory, messages.Follow, messages.StartAt, messages.Disabled = dir, false, "", false
 	cfg.Sources = []config.Source{messages}
 	cfg.StateFile = ""
 
@@ -69,8 +77,14 @@ func TestRunShippedConfig(t *testing.T) {
 		t.Fatalf("got %d alerts, want 1:\n%s", len(alerts), out.String())
 	}
 	a := alerts[0]
-	if a.RuleID != "ssh-failed-logins-per-ip" || len(a.Events) != 5 || a.Metadata["value"] != "203.0.113.7" {
+	// The rule matches every authentication event: the pam_unix lines are
+	// counted along with the "Failed password" ones, so the third event
+	// (Failed, pam, Failed) fires it; suppress keeps it to one alert.
+	if a.RuleID != "ssh-failed-logins-per-ip" || len(a.Events) != 3 || a.Metadata["value"] != "203.0.113.7" {
 		t.Errorf("unexpected alert: %+v", a)
+	}
+	if !strings.HasPrefix(a.Events[1].Message, "pam_unix(sshd:auth)") {
+		t.Errorf("second event of the alert: %q, want the pam_unix line", a.Events[1].Message)
 	}
 	ev := a.Events[0]
 	if ev.Source != "messages" || ev.Hostname != "myhost" || ev.Service != "sshd" || ev.Username != "root" || ev.Category != "authentication" {

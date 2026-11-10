@@ -25,11 +25,11 @@ func TestBuildRulesFromShippedConfig(t *testing.T) {
 	if !ok {
 		t.Fatalf("got %T, want *ThresholdRule", rules[0])
 	}
-	if r.ID() != "ssh-failed-logins-per-ip" || r.GroupBy != "SourceIP" || r.Count != 5 || r.Window != 5*time.Minute || r.Suppress != time.Hour {
+	if r.ID() != "ssh-failed-logins-per-ip" || r.GroupBy != "SourceIP" || r.Count != 3 || r.Window != 5*time.Minute || r.Suppress != time.Hour {
 		t.Errorf("unexpected rule: %+v", r)
 	}
-	if len(r.Match.HasFields) != 1 || r.Match.HasFields[0] != "auth_method" {
-		t.Errorf("unexpected match: %+v", r.Match)
+	if m := r.Match; m.Category != "authentication" || m.Service != "" || m.Action != "" || m.Status != "" || len(m.HasFields) != 0 {
+		t.Errorf("unexpected match: %+v, want only category authentication", r.Match)
 	}
 }
 
