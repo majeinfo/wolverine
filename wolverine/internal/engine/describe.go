@@ -16,6 +16,13 @@ func describe(cfg *config.Config) {
 	if verbose.Level < 1 {
 		return
 	}
+	if len(cfg.Files) > 1 {
+		for _, f := range cfg.Files[1:] {
+			verbose.Infof("included configuration file: %s", f)
+		}
+	} else {
+		verbose.Infof("no included configuration file")
+	}
 	for _, s := range cfg.Sources {
 		if s.Disabled {
 			verbose.Infof("source %s: disabled", s.ID)

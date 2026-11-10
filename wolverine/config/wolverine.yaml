@@ -16,6 +16,14 @@ allowlist:
 # start_at.
 state_file: /var/lib/wolverine/state.json
 
+# Directory of additional configuration files, relative to the directory of
+# this file. Every *.yaml and *.yml file in it is read, in lexical order
+# (10-ssh.yaml before 20-web.yaml), and its allowlist, sources, actions and
+# rules are added to those of this file. Hidden files and subdirectories are
+# ignored; state_file and include_dir can only be set here.
+# Without this setting, rules.d is used if it exists; "" disables it.
+include_dir: rules.d
+
 sources:
   # A log file read line by line. Each line is parsed with "regexp"; its
   # named groups fill the event:

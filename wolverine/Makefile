@@ -70,6 +70,19 @@ install: $(BIN)
 	@if [ ! -e $(DESTDIR)$(CONFDIR)/wolverine.env ]; then \
 		install -m 0600 deploy/systemd/wolverine.env.example $(DESTDIR)$(CONFDIR)/wolverine.env; \
 	fi
+	@# Included configuration files: same rule, an existing file is kept and
+	@# the new version gets a .new suffix (which wolverine does not read).
+	install -d -m 0755 $(DESTDIR)$(CONFDIR)/rules.d
+	@for f in config/rules.d/*.yaml config/rules.d/*.yml; do \
+		[ -e "$$f" ] || continue; \
+		dest=$(DESTDIR)$(CONFDIR)/rules.d/$$(basename "$$f"); \
+		if [ -e "$$dest" ]; then \
+			install -m 0644 "$$f" "$$dest.new"; \
+			echo "$(CONFDIR)/rules.d/$$(basename "$$f") exists: kept, the new one is $$(basename "$$f").new"; \
+		else \
+			install -m 0644 "$$f" "$$dest"; \
+		fi; \
+	done
 	install -D -m 0644 deploy/systemd/wolverine.sysusers $(DESTDIR)$(SYSUSERSDIR)/wolverine.conf
 	@mkdir -p $(DESTDIR)$(UNITDIR)
 	sed -e 's|/usr/local/bin/wolverine|$(BINDIR)/wolverine|g' \

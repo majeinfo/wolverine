@@ -94,20 +94,54 @@ counts the events.
 
 ## Configure
 
-The configuration is a YAML file with five sections:
+The configuration is a main YAML file with these sections:
 
 ```yaml
-allowlist:  [...]      # IPs that must never be blocked
-state_file: ...        # where the position of each source is saved
-sources:    [...]      # where events come from
-actions:    [...]      # what to do when an alert fires
-rules:      [...]      # what to detect, and which actions to run
+allowlist:   [...]     # IPs that must never be blocked
+state_file:  ...       # where the position of each source is saved
+include_dir: rules.d   # directory of additional configuration files
+sources:     [...]     # where events come from
+actions:     [...]     # what to do when an alert fires
+rules:       [...]     # what to detect, and which actions to run
 ```
 
 [`config/wolverine.yaml`](config/wolverine.yaml) is a complete, commented
 example. Unknown keys are rejected, so a typo does not silently disable part
 of a rule. Every source, action and rule has an `id` and can be turned off
 with `disabled: true`. Durations are written like `30s`, `5m` or `1h`.
+
+### Configuration directory
+
+The configuration can be split into several files. Every `*.yaml` and
+`*.yml` file in `include_dir` is read after the main file, in lexical order
+of the file names. Prefix the names with numbers to choose the order:
+`10-ssh.yaml` is read before `20-web.yaml`.
+
+```
+/etc/wolverine/
+  wolverine.yaml          main file: state_file, include_dir, shared actions...
+  rules.d/
+    10-ssh.yaml           rules, sources, actions or allowlist entries
+    20-web.yaml
+```
+
+- **Merging:** the `allowlist`, `sources`, `actions` and `rules` of each
+  file are added to those already read. A rule can use an action defined in
+  another file.
+- **Unique ids:** an id used twice is an error that names both files.
+- **Main file only:** `state_file` and `include_dir` can only be set in the
+  main file.
+- **Location:** `include_dir` is relative to the main file's directory, or
+  absolute.
+  - Without `include_dir`, `rules.d` next to the main file is read if it
+    exists.
+  - When `include_dir` is set, the directory must exist.
+  - `include_dir: ""` disables it.
+- **Ignored:** subdirectories, hidden files (starting with `.`) and other
+  extensions. To disable a file, rename it, for example to
+  `20-web.yaml.disabled`.
+
+With `-v`, wolverine lists the included files it read.
 
 ### Sources
 
@@ -477,6 +511,7 @@ This installs:
 |---|---|
 | `/usr/local/bin/wolverine` | the binary |
 | `/etc/wolverine/wolverine.yaml` | the configuration. If it already exists, it is kept and the new one is written as `wolverine.yaml.new` |
+| `/etc/wolverine/rules.d/` | the included configuration files from `config/rules.d/`, with the same rule: existing files are kept, new versions get a `.new` suffix |
 | `/etc/wolverine/wolverine.env` | the secrets (`*_env` variables), mode 0600. Only created if missing |
 | `/etc/systemd/system/wolverine.service` | the systemd unit |
 | `/usr/lib/sysusers.d/wolverine.conf` | creates the `wolverine` system user |

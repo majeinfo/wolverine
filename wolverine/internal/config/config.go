@@ -1,10 +1,16 @@
-// Package config loads the wolverine configuration file.
+// Package config loads the wolverine configuration: a main file and the
+// *.yaml / *.yml files of its include directory.
 package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -16,11 +22,23 @@ type Config struct {
 	Allowlist []string `yaml:"allowlist"`
 	// StateFile is where the position of every source is saved, so that a
 	// restart resumes after the last line or entry processed. Optional.
-	StateFile string   `yaml:"state_file"`
-	Sources   []Source `yaml:"sources"`
-	Actions   []Action `yaml:"actions"`
-	Rules     []Rule   `yaml:"rules"`
+	StateFile string `yaml:"state_file"`
+	// IncludeDir is a directory of additional configuration files, relative
+	// to the main file's directory. Absent: DefaultIncludeDir, if it exists.
+	// Empty: no include directory.
+	IncludeDir *string  `yaml:"include_dir"`
+	Sources    []Source `yaml:"sources"`
+	Actions    []Action `yaml:"actions"`
+	Rules      []Rule   `yaml:"rules"`
+
+	// Files lists the files the configuration was read from: the main file
+	// first, then the included ones in the order they were read.
+	Files []string `yaml:"-"`
 }
+
+// DefaultIncludeDir is the include directory used when the main file does
+// not set include_dir.
+const DefaultIncludeDir = "rules.d"
 
 // Source describes where events come from. Which fields apply depends on
 // Type.
@@ -146,9 +164,59 @@ type Match struct {
 	HasFields []string `yaml:"has_fields"`
 }
 
-// Load reads and decodes the configuration file. Unknown keys are rejected
-// so that typos do not silently disable part of a rule.
+// Load reads the main configuration file, then the *.yaml and *.yml files of
+// its include directory in lexical order. The allowlist, sources, actions and
+// rules of the included files are added to those of the main file;
+// state_file and include_dir may only be set in the main file. Unknown keys
+// are rejected so that typos do not silently disable part of a rule.
 func Load(path string) (*Config, error) {
+	cfg, err := loadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Files = []string{path}
+
+	ids := newIDs()
+	if err := ids.add(cfg, path); err != nil {
+		return nil, err
+	}
+
+	dir, required := DefaultIncludeDir, false
+	if cfg.IncludeDir != nil {
+		dir, required = *cfg.IncludeDir, true
+	}
+	if dir == "" {
+		return cfg, nil
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(filepath.Dir(path), dir)
+	}
+	files, err := includedFiles(dir, required)
+	if err != nil {
+		return nil, fmt.Errorf("%s: include_dir: %w", path, err)
+	}
+	for _, f := range files {
+		part, err := loadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		if part.StateFile != "" || part.IncludeDir != nil {
+			return nil, fmt.Errorf("%s: state_file and include_dir are only allowed in the main configuration file %s", f, path)
+		}
+		if err := ids.add(part, f); err != nil {
+			return nil, err
+		}
+		cfg.Allowlist = append(cfg.Allowlist, part.Allowlist...)
+		cfg.Sources = append(cfg.Sources, part.Sources...)
+		cfg.Actions = append(cfg.Actions, part.Actions...)
+		cfg.Rules = append(cfg.Rules, part.Rules...)
+		cfg.Files = append(cfg.Files, f)
+	}
+	return cfg, nil
+}
+
+// loadFile decodes one configuration file. An empty file is valid.
+func loadFile(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -157,8 +225,79 @@ func Load(path string) (*Config, error) {
 	dec.KnownFields(true)
 
 	var cfg Config
-	if err := dec.Decode(&cfg); err != nil {
+	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// includedFiles returns the configuration files of dir, sorted by name:
+// regular files (or links to them) named *.yaml or *.yml, except hidden
+// ones (editor backups...). Subdirectories are not read. A missing directory
+// is an error only if required.
+func includedFiles(dir string, required bool) ([]string, error) {
+	entries, err := os.ReadDir(dir) // sorted by name
+	if errors.Is(err, fs.ErrNotExist) && !required {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		ext := filepath.Ext(name)
+		if strings.HasPrefix(name, ".") || (ext != ".yaml" && ext != ".yml") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		fi, err := os.Stat(path) // follows links
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode().IsRegular() {
+			files = append(files, path)
+		}
+	}
+	return files, nil
+}
+
+// ids detects the sources, actions and rules defined twice, possibly in
+// different files, and tells where.
+type ids map[string]map[string]string // kind -> id -> file
+
+func newIDs() ids {
+	return ids{"source": {}, "action": {}, "rule": {}}
+}
+
+func (d ids) add(cfg *Config, file string) error {
+	check := func(kind, id string) error {
+		if id == "" {
+			return nil // reported when the configuration is built
+		}
+		if first, dup := d[kind][id]; dup {
+			if first == file {
+				return fmt.Errorf("%s: %s %q is defined twice", file, kind, id)
+			}
+			return fmt.Errorf("%s: %s %q is already defined in %s", file, kind, id, first)
+		}
+		d[kind][id] = file
+		return nil
+	}
+	for _, s := range cfg.Sources {
+		if err := check("source", s.ID); err != nil {
+			return err
+		}
+	}
+	for _, a := range cfg.Actions {
+		if err := check("action", a.ID); err != nil {
+			return err
+		}
+	}
+	for _, r := range cfg.Rules {
+		if err := check("rule", r.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
