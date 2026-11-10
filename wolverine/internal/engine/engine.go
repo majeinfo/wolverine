@@ -128,6 +128,7 @@ type item struct {
 	// start, when set, replaces all the positions of the source: where it
 	// starts, given right after Open.
 	start map[string]any
+	done  func() // source.Record.Done
 }
 
 // Run reads every source until they are all exhausted (sources that follow
@@ -178,6 +179,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		// The position is recorded once the event has been processed, so a
 		// restart never skips an event that was read but not processed.
 		defer e.setPosition(it)
+		if it.done != nil {
+			defer it.done()
+		}
 		if it.ev == nil {
 			return
 		}
@@ -291,14 +295,14 @@ func (e *Engine) read(ctx context.Context, in *input, events chan<- item) error 
 		if rec.Data == nil {
 			// No line: only a change of positions.
 			select {
-			case events <- item{in: in, forget: rec.Forget, key: rec.PositionKey, position: rec.Position}:
+			case events <- item{in: in, forget: rec.Forget, key: rec.PositionKey, position: rec.Position, done: rec.Done}:
 			case <-ctx.Done():
 				return nil
 			}
 			continue
 		}
 		n := in.lines.Add(1)
-		it := item{in: in, key: rec.PositionKey, position: rec.Position}
+		it := item{in: in, key: rec.PositionKey, position: rec.Position, done: rec.Done}
 		if len(rec.Data) > 0 {
 			ev, err := in.parser.Parse(rec)
 			if err != nil {

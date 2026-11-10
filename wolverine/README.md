@@ -284,6 +284,107 @@ file after the date with macros in the file name:
   `follow: false`. With the state file, a file already read is not read
   again.
 
+#### `aws-s3`: log files written to an S3 bucket
+
+For logs delivered to S3: load balancer and CloudFront access logs, VPC
+flow logs, S3 server access logs, or files your applications upload.
+
+```yaml
+- id: alb
+  type: aws-s3
+  queue_url: https://sqs.eu-west-3.amazonaws.com/123456789012/alb-logs
+  key_regexp: '\.log\.gz$'      # optional: only these objects
+  follow: true
+  visibility_timeout: 5m          # default
+  aws:
+    access_key_id_env: WOLVERINE_ALB_AWS_KEY_ID
+    secret_access_key_env: WOLVERINE_ALB_AWS_SECRET
+  regexp: '...'
+  timestamp_formats: [rfc3339]
+  category: web
+```
+
+The bucket notifies an SQS queue of each new object. For each notification,
+wolverine:
+
+1. downloads the object;
+2. decompresses it if it is gzip or bzip2, recognized by its content;
+3. parses its lines with `regexp`, like a `logfile` source (`timestamp_formats`,
+   `timezone` and `category` too). `Fields.file` is `s3://bucket/key`;
+4. deletes the message once every line has gone through the rules.
+
+**Setting up AWS:**
+
+- **Queue:** create an SQS queue in the bucket's region. Give it a
+  dead-letter queue (redrive policy), so that a message that keeps failing
+  stops coming back.
+- **Notifications:** in the bucket's properties, send the "All object create
+  events" to the queue (the queue's access policy must allow the bucket to
+  send messages). Notifications delivered through SNS (without raw message
+  delivery) or EventBridge are understood too.
+- **Permissions** of the credentials wolverine uses:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {"Effect": "Allow",
+       "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"],
+       "Resource": "arn:aws:sqs:eu-west-3:123456789012:alb-logs"},
+      {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::my-log-bucket/*"}
+    ]
+  }
+  ```
+
+  Add `kms:Decrypt` on the key if the bucket is encrypted with SSE-KMS.
+
+**Credentials and region**, per source, in `aws`:
+
+| Setting | Credentials used |
+|---|---|
+| `access_key_id_env`, `secret_access_key_env` (and `session_token_env`) | the keys in these environment variables. Each source can have its own; a missing variable stops wolverine at startup |
+| `profile`, `credentials_file`, `config_file` | a profile of the shared credentials and config files (default `~/.aws/credentials` and `~/.aws/config`, default profile `default`). `config_file` usually holds the region |
+| none of them | the AWS SDK's defaults: the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` variables, then the default profile of `~/.aws`, then the role of the EC2 instance or ECS task |
+
+The region is `aws.region`, else the one of the profile or `AWS_REGION`,
+else the one in `queue_url`. `aws.endpoint_url` replaces the AWS endpoints,
+for S3- and SQS-compatible services such as LocalStack or MinIO.
+
+With `-v`, wolverine shows each source's region and where its credentials
+come from, and checks at startup that the queue can be reached.
+
+**Behavior:**
+
+- **At least once.** A message is deleted only after all the lines of its
+  file have been processed. If wolverine stops or crashes before, the
+  message becomes visible again and the file is read again: its events
+  can be counted twice. S3 itself may also notify an object twice, rarely.
+- **One file at a time.** Messages are received one by one. While a file
+  is read, the visibility timeout of its message is extended, so a long
+  download is not handed to another reader. When wolverine stops in the
+  middle of a file, its message is released right away for the next run.
+- **`follow`:** with `follow: true`, wolverine waits for new notifications
+  (SQS long polling). With `follow: false`, it stops when the queue is
+  empty, which suits a run from cron. `start_at` does not apply: the queue
+  holds what has not been read yet.
+- **Errors:**
+  - An object deleted since its notification is skipped.
+  - Any other download error leaves the message in the queue: it is tried
+    again after the visibility timeout.
+  - A message that is not an S3 notification is logged and left in the
+    queue: the dead-letter queue takes it after a few attempts.
+  - Deletion notifications and S3's test event are deleted without
+    downloading anything.
+  - When the queue cannot be reached while following, wolverine retries,
+    waiting up to a minute between attempts.
+- **Line-oriented files only.** Files made of one JSON document, such as
+  CloudTrail logs, are read as a single line.
+
+When wolverine runs as a service, `~/.aws` is `/var/lib/wolverine/.aws`.
+Put the keys in `/etc/wolverine/wolverine.env` (with `*_env` settings), or
+in a credentials file readable by the `wolverine` user, for example
+`/etc/wolverine/aws/credentials` owned by `root:wolverine` with mode 0640.
+
 #### `systemd-service`: a service's entries in the systemd journal
 
 ```yaml

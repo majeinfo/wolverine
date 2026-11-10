@@ -70,13 +70,51 @@ type Source struct {
 	// applied to the message only, the other fields coming from the journal.
 	Regexp string `yaml:"regexp"`
 
-	// logfile only. TimestampFormats parse the "timestamp" group: rfc3164, rfc3339 or a
-	// Go time layout. Default: [rfc3164, rfc3339].
+	// aws-s3: the SQS queue receiving the notifications of the objects
+	// created in the bucket; the objects are downloaded and read line by
+	// line.
+	QueueURL string `yaml:"queue_url"`
+	// aws-s3: only the objects whose key matches it are read (default:
+	// all).
+	KeyRegexp string `yaml:"key_regexp"`
+	// aws-s3: how long a message stays hidden from other receivers while
+	// its object is read; extended while reading takes longer (default:
+	// 5m).
+	VisibilityTimeout time.Duration `yaml:"visibility_timeout"`
+	// aws-s3: credentials and region.
+	AWS AWS `yaml:"aws"`
+
+	// logfile and aws-s3. TimestampFormats parse the "timestamp" group:
+	// rfc3164, rfc3339 or a Go time layout. Default: [rfc3164, rfc3339].
 	TimestampFormats []string `yaml:"timestamp_formats"`
 	// Timezone for timestamps without one (default: local time).
 	Timezone string `yaml:"timezone"`
 	// Category set on the events (default: system).
 	Category string `yaml:"category"`
+}
+
+// AWS holds the credentials and region of an aws-s3 source. Without any of
+// them, the AWS SDK's defaults apply: the AWS_* environment variables, then
+// the default profile of ~/.aws/credentials and ~/.aws/config, then the
+// role of the EC2 instance or ECS task.
+type AWS struct {
+	// Region, e.g. eu-west-3. Default: from the profile or AWS_REGION,
+	// else from the queue URL.
+	Region string `yaml:"region"`
+	// Profile of the shared credentials and config files.
+	Profile string `yaml:"profile"`
+	// CredentialsFile and ConfigFile replace ~/.aws/credentials and
+	// ~/.aws/config.
+	CredentialsFile string `yaml:"credentials_file"`
+	ConfigFile      string `yaml:"config_file"`
+	// The names of the environment variables holding the keys of this
+	// source, so that they are not stored in the configuration file.
+	AccessKeyIDEnv     string `yaml:"access_key_id_env"`
+	SecretAccessKeyEnv string `yaml:"secret_access_key_env"`
+	SessionTokenEnv    string `yaml:"session_token_env"`
+	// EndpointURL replaces the AWS endpoints of SQS and S3, for S3- and
+	// SQS-compatible services (LocalStack, MinIO...).
+	EndpointURL string `yaml:"endpoint_url"`
 }
 
 // Action describes what to do when an alert fires. Which fields apply

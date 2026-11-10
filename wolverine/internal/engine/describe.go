@@ -45,6 +45,12 @@ func describe(cfg *config.Config) {
 		if s.Directory != "" {
 			target = fmt.Sprintf("%s (files matching %s)", s.Directory, s.FilenameRegexp)
 		}
+		if s.Type == "aws-s3" {
+			target = "queue " + s.QueueURL
+			if s.KeyRegexp != "" {
+				target += fmt.Sprintf(" (keys matching %s)", s.KeyRegexp)
+			}
+		}
 		if s.Type == "systemd-service" {
 			target = "unit " + systemdUnitName(s.Unit)
 		}

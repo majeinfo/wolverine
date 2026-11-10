@@ -44,6 +44,9 @@ func buildSources(cfgs []config.Source) ([]*input, error) {
 }
 
 func buildSource(c config.Source) (*input, error) {
+	if c.Type != "aws-s3" && (c.QueueURL != "" || c.KeyRegexp != "" || c.VisibilityTimeout != 0 || c.AWS != (config.AWS{})) {
+		return nil, fmt.Errorf("queue_url, key_regexp, visibility_timeout and aws only apply to an aws-s3 source")
+	}
 	switch c.Type {
 	case "logfile":
 		if c.Unit != "" {
@@ -51,6 +54,16 @@ func buildSource(c config.Source) (*input, error) {
 		}
 
 		return buildLogfile(c)
+	case "aws-s3":
+		switch {
+		case c.Path != "" || c.Directory != "" || c.FilenameRegexp != "":
+			return nil, errors.New("path, directory and filename_regexp do not apply to an aws-s3 source")
+		case c.Unit != "":
+			return nil, errors.New("unit does not apply to an aws-s3 source")
+		case c.StartAt != "":
+			return nil, errors.New("start_at does not apply to an aws-s3 source (the queue holds the objects not read yet)")
+		}
+		return buildAWSS3(c)
 	case "systemd-service":
 		switch {
 		case c.Path != "" || c.Directory != "" || c.FilenameRegexp != "":
@@ -102,6 +115,18 @@ func buildLogfile(c config.Source) (*input, error) {
 		return nil, err
 	}
 
+	p, err := lineParser(c)
+	if err != nil {
+		return nil, err
+	}
+	src.StartAtEnd = startAtEnd
+	src.Location = p.Location
+	return &input{source: src, parser: p}, nil
+}
+
+// lineParser creates the regexp parser of the sources reading text lines
+// (logfile, aws-s3).
+func lineParser(c config.Source) (*syslog.Parser, error) {
 	if c.Regexp == "" {
 		return nil, fmt.Errorf("regexp is required")
 	}
@@ -120,8 +145,6 @@ func buildLogfile(c config.Source) (*input, error) {
 		}
 	}
 
-	src.StartAtEnd = startAtEnd
-
 	loc := time.Local
 	if c.Timezone != "" {
 		if loc, err = time.LoadLocation(c.Timezone); err != nil {
@@ -129,16 +152,11 @@ func buildLogfile(c config.Source) (*input, error) {
 		}
 	}
 
-	src.Location = loc
-
-	return &input{
-		source: src,
-		parser: &syslog.Parser{
-			Regexp:           re,
-			Category:         category(c),
-			TimestampFormats: formats,
-			Location:         loc,
-		},
+	return &syslog.Parser{
+		Regexp:           re,
+		Category:         category(c),
+		TimestampFormats: formats,
+		Location:         loc,
 	}, nil
 }
 

@@ -80,6 +80,38 @@ sources:
   #   follow: false
   #   regexp: '^(?P<message>.*)$'
 
+  # Log files written to an S3 bucket (ALB, CloudFront, VPC flow logs,
+  # S3 access logs, applications...). The bucket sends a notification of
+  # each new object to an SQS queue; wolverine receives it, downloads the
+  # object, decompresses it (gzip, bzip2) and parses its lines with regexp,
+  # like a logfile. The message is deleted once all the lines have been
+  # processed: if wolverine stops before, the file is read again later.
+  # With follow: false, wolverine stops when the queue is empty.
+  #
+  # Credentials and region ("aws"), per source; without them, the AWS
+  # SDK's defaults apply (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+  # AWS_REGION, ~/.aws/credentials and ~/.aws/config, instance role):
+  #   access_key_id_env, secret_access_key_env, session_token_env:
+  #       names of the environment variables holding this source's keys
+  #   profile, credentials_file, config_file: a profile of the shared files
+  #   region: default: from the profile or AWS_REGION, else the queue URL
+  #   endpoint_url: S3/SQS-compatible service (LocalStack, MinIO...)
+  # - id: alb
+  #   type: aws-s3
+  #   queue_url: https://sqs.eu-west-3.amazonaws.com/123456789012/alb-logs
+  #   key_regexp: '\.log\.gz$'     # optional: only these objects
+  #   follow: true
+  #   visibility_timeout: 5m        # extended while a file is read
+  #   aws:
+  #     access_key_id_env: WOLVERINE_ALB_AWS_KEY_ID
+  #     secret_access_key_env: WOLVERINE_ALB_AWS_SECRET
+  #     # or: profile: wolverine
+  #     #     credentials_file: /etc/wolverine/aws/credentials
+  #     #     config_file: /etc/wolverine/aws/config
+  #   regexp: '^(?P<type>\S+) (?P<timestamp>\S+) (?P<elb>\S+) (?P<source_ip>[^ :]+):\d+ \S+ \S+ \S+ \S+ (?P<status>\d{3}) .*$'
+  #   timestamp_formats: [rfc3339]
+  #   category: web
+
   # The journal entries of a systemd service, read through the sd-journal
   # API. The event fields come from the journal: timestamp, hostname,
   # service (SYSLOG_IDENTIFIER, e.g. sshd-session), severity, facility, pid

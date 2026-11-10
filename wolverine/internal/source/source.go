@@ -25,7 +25,14 @@ type Record struct {
 	// rotated away).
 	Forget []string
 	// A record with nil Data carries no line: it only updates the positions
-	// (Forget, or Position under PositionKey).
+	// (Forget, or Position under PositionKey), or calls Done.
+
+	// Done, when set, is called once the record has been processed, after
+	// the detection rules (the actions may still be running). Records are
+	// processed in the order they are read, so it is also called after the
+	// earlier records of the source. Sources that must acknowledge what
+	// they read (a message queue) use it.
+	Done func()
 }
 
 type Source interface {
