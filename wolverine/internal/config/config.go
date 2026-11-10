@@ -48,7 +48,9 @@ type Source struct {
 	Disabled bool   `yaml:"disabled"`
 
 	// logfile: the file to read, or the files of Directory whose names
-	// match FilenameRegexp.
+	// match FilenameRegexp. Path may contain date macros in its file name
+	// (app.log.${year}-${month}-${day-1}, see package pathtemplate): the
+	// file read is then the one named after the current date.
 	Path           string `yaml:"path"`
 	Directory      string `yaml:"directory"`
 	FilenameRegexp string `yaml:"filename_regexp"`

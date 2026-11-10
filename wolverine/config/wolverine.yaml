@@ -66,6 +66,20 @@ sources:
   #   timestamp_formats: ["02/Jan/2006:15:04:05 -0700"]
   #   category: web
 
+  # "path" may name the file after the date, with macros in the file name:
+  # ${year}, ${month}, ${day}, ${hour}, ${minute}, ${second}, or an
+  # expression of them (govaluate syntax). The file read is the one named
+  # after the current date (in timezone); when the date changes, the
+  # previous file is read to its end, then the new one.
+  # "${day-1}" moves the date back one day: on March 1, the path below is
+  # app.log.2026-02-28 (${month} follows the shift). Other expressions, e.g.
+  # ${year%100}, are computed and rounded down.
+  # - id: app
+  #   type: logfile
+  #   path: /var/log/app/app.log.${year}-${month}-${day-1}
+  #   follow: false
+  #   regexp: '^(?P<message>.*)$'
+
   # The journal entries of a systemd service, read through the sd-journal
   # API. The event fields come from the journal: timestamp, hostname,
   # service (SYSLOG_IDENTIFIER, e.g. sshd-session), severity, facility, pid

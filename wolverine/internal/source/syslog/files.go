@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"wolverine/internal/pathtemplate"
 	"wolverine/internal/source"
 	"wolverine/internal/verbose"
 )
@@ -36,9 +37,14 @@ const (
 	maxHistory = 200
 )
 
-// Files reads log files line by line: a single file (Path), or every file
-// of directory Dir whose name matches Pattern. It implements source.Source
-// and source.Resumer.
+// Files reads log files line by line: a single file (Path), every file of
+// directory Dir whose name matches Pattern, or the file named by Template
+// at the current date (e.g. app.log.${year}-${month}-${day}). It implements
+// source.Source and source.Resumer.
+//
+// With a Template, the name is computed again at each poll: when the date
+// changes, the previous file is read to its end, then the new one is read
+// from its beginning as soon as it exists.
 //
 // Each file is tracked by its identity (device and inode), not by its name:
 // a file renamed to another matching name (messages -> messages-20261108)
@@ -61,13 +67,19 @@ type Files struct {
 	Path    string
 	Dir     string
 	Pattern *regexp.Regexp
-	Follow  bool
+	// Template names the file to read; its directory must not contain
+	// macros. Location is the time zone of its dates (default: local time).
+	Template *pathtemplate.Template
+	Location *time.Location
+	Now      func() time.Time // default: time.Now
+	Follow   bool
 	// StartAtEnd only applies to the files present when the source is
 	// first opened without saved positions.
 	StartAtEnd bool
 	Poll       time.Duration
 
 	files   []*file
+	current string              // Template expanded at the last scan: the file to read
 	next    int                 // round robin between the files
 	done    map[string]Position // compressed files read to their end, by key
 	saved   map[string]Position
@@ -124,17 +136,52 @@ func (p Position) continues(head []byte) bool {
 func (s *Files) Name() string { return s.ID }
 
 func (s *Files) dir() string {
-	if s.Path != "" {
+	switch {
+	case s.Path != "":
 		return filepath.Dir(s.Path)
+	case s.Template != nil:
+		return filepath.Dir(s.Template.String())
 	}
 	return s.Dir
 }
 
 func (s *Files) matches(name string) bool {
-	if s.Path != "" {
+	switch {
+	case s.Path != "":
 		return name == filepath.Base(s.Path)
+	case s.Template != nil:
+		return name == s.current
 	}
 	return s.Pattern.MatchString(name)
+}
+
+// expand computes the name of the file to read with Template, at the
+// current date.
+func (s *Files) expand() error {
+	if s.Template == nil {
+		return nil
+	}
+	now := time.Now
+	if s.Now != nil {
+		now = s.Now
+	}
+	loc := s.Location
+	if loc == nil {
+		loc = time.Local
+	}
+	path, err := s.Template.Expand(now().In(loc))
+	if err != nil {
+		return err
+	}
+	if name := filepath.Base(path); name != s.current {
+		if s.current != "" {
+			verbose.Infof("source %s: the date changed, the file to read is now %s", s.ID, path)
+		} else {
+			verbose.Debugf("source %s: %s expands to %s", s.ID, s.Template, path)
+		}
+		s.current = name
+	}
+	return nil
 }
 
 func (s *Files) Resume(positions map[string]json.RawMessage) error {
@@ -191,6 +238,9 @@ func (s *Files) known(dev, ino uint64) bool {
 
 func (s *Files) Open(ctx context.Context) error {
 	s.done = map[string]Position{}
+	if err := s.expand(); err != nil {
+		return err
+	}
 	if s.Path != "" {
 		// A missing single file is a configuration error.
 		if _, err := os.Stat(s.Path); err != nil {
@@ -272,7 +322,11 @@ func (s *Files) Open(ctx context.Context) error {
 		}
 	}
 	if len(s.files) == 0 && len(s.done) == 0 {
-		verbose.Infof("source %s: no file in %s matches %s", s.ID, s.dir(), s.Pattern)
+		if s.Template != nil {
+			verbose.Infof("source %s: %s does not exist (yet)", s.ID, filepath.Join(s.dir(), s.current))
+		} else {
+			verbose.Infof("source %s: no file in %s matches %s", s.ID, s.dir(), s.Pattern)
+		}
 	}
 	return nil
 }
@@ -636,6 +690,9 @@ func (s *Files) finish(f *file) {
 // rescan looks for the files that appeared, no longer match or were
 // truncated. It tells whether new files were added.
 func (s *Files) rescan() (bool, error) {
+	if err := s.expand(); err != nil {
+		return false, err
+	}
 	entries, err := s.scan()
 	if err != nil {
 		// The directory may be briefly unavailable; try again later.

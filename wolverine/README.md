@@ -245,6 +245,45 @@ as with `filename_regexp`.
 Log rotation (rename or copytruncate) is handled while following, and also
 while wolverine is stopped (see [State file](#state-file)).
 
+##### Dated file names
+
+For applications that write one file per day (or hour), `path` can name the
+file after the date with macros in the file name:
+
+```yaml
+- id: app
+  type: logfile
+  path: /var/log/app/app.log.${year}-${month}-${day}
+  follow: true
+  regexp: '...'
+```
+
+- **Variables:** `${year}`, `${month}`, `${day}`, `${hour}`, `${minute}`,
+  `${second}`, from the current date in the source's `timezone` (default:
+  local time). The year has 4 digits, the others 2: `app.log.2026-11-09`.
+- **Shifting the date:** `${day-1}` is yesterday, `${hour+1}` the next
+  hour. A shift moves the whole date, and every macro of the path follows
+  it. On March 1, `app.log.${year}-${month}-${day-1}` is
+  `app.log.2026-02-28`, and on January 1 it is `app.log.2025-12-31`. A shift
+  is written `name`, `name+N` or `name-N`, with N an integer. A variable can
+  only be shifted by one amount in a path.
+- **Expressions:** any other expression
+  ([govaluate](https://github.com/Knetic/govaluate) syntax) is computed from
+  the shifted date: `${year%100}` gives `26`, `${hour - hour%6}` gives `00`,
+  `06`, `12` or `18`, and `${day > 15 ? 2 : 1}` gives `01` or `02`. The
+  arithmetic is done on decimal numbers, so `${hour/6}` at 13:00 is 2.17;
+  the result is rounded down and written with at least 2 digits (`02`).
+- **Which file:** the one named after the current date. When the date
+  changes, the previous file is read to its end, then the new one from its
+  beginning, as soon as it exists. A missing file is not an error.
+  Files named after other dates are not read.
+- **Directory:** the macros are only allowed in the file name, not in the
+  directories of `path`.
+- **Example:** to process yesterday's complete file once a day, from cron,
+  use `path: /var/log/app/app.log.${year}-${month}-${day-1}` with
+  `follow: false`. With the state file, a file already read is not read
+  again.
+
 #### `systemd-service`: a service's entries in the systemd journal
 
 ```yaml

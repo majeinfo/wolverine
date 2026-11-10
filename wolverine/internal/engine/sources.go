@@ -3,10 +3,12 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"time"
 
 	"wolverine/internal/config"
+	"wolverine/internal/pathtemplate"
 	"wolverine/internal/source/syslog"
 )
 
@@ -71,6 +73,15 @@ func buildLogfile(c config.Source) (*input, error) {
 	switch {
 	case c.Path != "" && (c.Directory != "" || c.FilenameRegexp != ""):
 		return nil, errors.New("set either path, or directory and filename_regexp")
+	case pathtemplate.HasMacros(c.Path):
+		if pathtemplate.HasMacros(filepath.Dir(c.Path)) {
+			return nil, errors.New("path: macros are only allowed in the file name, not in the directory")
+		}
+		tmpl, err := pathtemplate.Parse(c.Path)
+		if err != nil {
+			return nil, fmt.Errorf("path: %w", err)
+		}
+		src.Path, src.Template = "", tmpl
 	case c.Path != "":
 	case c.Directory == "" && c.FilenameRegexp == "":
 		return nil, errors.New("path is required (or directory and filename_regexp)")
@@ -117,6 +128,8 @@ func buildLogfile(c config.Source) (*input, error) {
 			return nil, fmt.Errorf("timezone: %w", err)
 		}
 	}
+
+	src.Location = loc
 
 	return &input{
 		source: src,

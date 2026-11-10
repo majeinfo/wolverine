@@ -5,8 +5,10 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"wolverine/internal/config"
+	"wolverine/internal/pathtemplate"
 	"wolverine/internal/verbose"
 )
 
@@ -33,6 +35,13 @@ func describe(cfg *config.Config) {
 			startAt = "beginning"
 		}
 		target := s.Path
+		if pathtemplate.HasMacros(s.Path) {
+			if tmpl, err := pathtemplate.Parse(s.Path); err == nil {
+				if now, err := tmpl.Expand(time.Now().In(location(s))); err == nil {
+					target = fmt.Sprintf("%s (now %s)", s.Path, now)
+				}
+			}
+		}
 		if s.Directory != "" {
 			target = fmt.Sprintf("%s (files matching %s)", s.Directory, s.FilenameRegexp)
 		}
@@ -118,4 +127,14 @@ func systemdUnitName(unit string) string {
 		return unit
 	}
 	return unit + ".service"
+}
+
+// location returns the time zone of a source's dates.
+func location(s config.Source) *time.Location {
+	if s.Timezone != "" {
+		if loc, err := time.LoadLocation(s.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.Local
 }
