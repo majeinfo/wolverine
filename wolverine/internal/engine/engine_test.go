@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -256,6 +257,59 @@ func TestRunSourceExcludeIf(t *testing.T) {
 	}
 }
 
+// A rule's exclude_if only makes that rule ignore the events; it can use
+// the regexp groups of every source.
+func TestRunRuleExcludeIf(t *testing.T) {
+	dir := t.TempDir()
+	web := filepath.Join(dir, "access.log")
+	os.WriteFile(web, []byte(strings.Repeat(`203.0.113.7 401 "curl/8.5"`+"\n", 3)+strings.Repeat(`198.51.100.4 401 "Mozilla/5.0"`+"\n", 3)), 0o644)
+	ssh := filepath.Join(dir, "secure")
+	os.WriteFile(ssh, []byte(strings.Repeat("Failed password for deploy from 192.0.2.9\n", 3)), 0o644)
+
+	webSrc := logfile(web)
+	webSrc.ID = "web"
+	webSrc.Regexp = `^(?P<source_ip>\S+) (?P<status>\d+) "(?P<user_agent>[^"]*)"$`
+	sshSrc := logfile(ssh)
+	sshSrc.ID = "ssh"
+	sshSrc.Regexp = `^Failed password for (?P<username>\S+) from (?P<source_ip>\S+)$`
+	rule := func(id, excludeIf string) config.Rule {
+		return config.Rule{ID: id, Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour, ExcludeIf: excludeIf}
+	}
+	cfg := &config.Config{
+		ExcludeLists: []config.ExcludeList{{ID: "lab", Entries: []string{"192.0.2.0/24"}}},
+		Sources:      []config.Source{webSrc, sshSrc},
+		Rules: []config.Rule{
+			// user_agent comes from the web source; it is "" for the ssh
+			// events.
+			rule("filtered", `user_agent.startsWith("curl") || (username == "deploy" && in_list(source_ip, "lab"))`),
+			rule("all", ""),
+		},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	eng.Alerts = &out
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	dec := json.NewDecoder(&out)
+	for dec.More() {
+		var a event.Alert
+		if err := dec.Decode(&a); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprint(a.RuleID, " ", a.Metadata["value"]))
+	}
+	sort.Strings(got)
+	want := "all 192.0.2.9,all 198.51.100.4,all 203.0.113.7,filtered 198.51.100.4"
+	if strings.Join(got, ",") != want {
+		t.Errorf("alerts %s, want %s", strings.Join(got, ","), want)
+	}
+}
+
 func TestBuildExcludeErrors(t *testing.T) {
 	cfg := &config.Config{
 		Sources:      []config.Source{logfile("/var/log/messages")},
@@ -275,6 +329,11 @@ func TestBuildExcludeErrors(t *testing.T) {
 		t.Errorf("unknown list in a source: got %v", err)
 	}
 	cfg.Sources[0].Exclude = nil
+	cfg.Rules = []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 1, Window: time.Minute, ExcludeIf: `nope == ""`}}
+	if _, err := New(cfg); err == nil || !strings.HasPrefix(err.Error(), `rule "r": exclude_if: `) || !strings.Contains(err.Error(), "undeclared reference to 'nope'") {
+		t.Errorf("rule exclude_if: got %v", err)
+	}
+	cfg.Rules = nil
 	for expr, want := range map[string]string{
 		`user_agent == "x"`:       "undeclared reference to 'user_agent'",
 		`in_list(source_ip, "b")`: `unknown exclude list "b"`,

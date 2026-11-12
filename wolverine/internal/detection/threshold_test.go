@@ -128,3 +128,34 @@ func TestExclude(t *testing.T) {
 		t.Fatalf("got %d alerts, want 1", len(alerts))
 	}
 }
+
+func TestExcludeIf(t *testing.T) {
+	r := sshFailedLoginsPerIP(2, time.Minute)
+	calls := 0
+	r.Match.ExcludeIf = func(ev *event.Event) bool {
+		calls++
+		return ev.Username == "deploy"
+	}
+	now := time.Now()
+	ev := func(user string) *event.Event {
+		e := failed("10.0.0.1", now)
+		e.Username = user
+		return e
+	}
+	for range 3 {
+		if alerts := r.Evaluate(ev("deploy")); len(alerts) != 0 {
+			t.Fatalf("excluded events raised %d alerts", len(alerts))
+		}
+	}
+	// Only called for the events the rule matches otherwise.
+	other := ev("root")
+	other.Category = "system"
+	r.Evaluate(other)
+	if calls != 3 {
+		t.Errorf("called %d times, want 3", calls)
+	}
+	r.Evaluate(ev("root"))
+	if alerts := r.Evaluate(ev("root")); len(alerts) != 1 {
+		t.Fatalf("got %d alerts, want 1", len(alerts))
+	}
+}

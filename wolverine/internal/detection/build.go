@@ -4,11 +4,13 @@ import (
 	"fmt"
 
 	"wolverine/internal/config"
+	"wolverine/internal/event"
 )
 
 // BuildRules creates the rules described in the configuration, skipping the
-// disabled ones.
-func BuildRules(cfgs []config.Rule) ([]Rule, error) {
+// disabled ones. excludeIf holds the compiled exclude_if conditions, by rule
+// id.
+func BuildRules(cfgs []config.Rule, excludeIf map[string]func(*event.Event) bool) ([]Rule, error) {
 	var rules []Rule
 	seen := map[string]bool{}
 	for i, c := range cfgs {
@@ -23,7 +25,7 @@ func BuildRules(cfgs []config.Rule) ([]Rule, error) {
 			continue
 		}
 
-		r, err := buildRule(c)
+		r, err := buildRule(c, excludeIf[c.ID])
 		if err != nil {
 			return nil, fmt.Errorf("rule %q: %w", c.ID, err)
 		}
@@ -32,7 +34,7 @@ func BuildRules(cfgs []config.Rule) ([]Rule, error) {
 	return rules, nil
 }
 
-func buildRule(c config.Rule) (Rule, error) {
+func buildRule(c config.Rule, excludeIf func(*event.Event) bool) (Rule, error) {
 	match := Match{
 		Category:  c.Match.Category,
 		Service:   c.Match.Service,
@@ -40,6 +42,7 @@ func buildRule(c config.Rule) (Rule, error) {
 		Status:    c.Match.Status,
 		HasFields: c.Match.HasFields,
 		Exclude:   c.Exclude,
+		ExcludeIf: excludeIf,
 	}
 
 	switch c.Type {

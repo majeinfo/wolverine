@@ -3,6 +3,7 @@ package filter
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"cel.dev/cel-go/interpreter"
 
 	"wolverine/internal/event"
+	"wolverine/internal/verbose"
 )
 
 // commonVariables are the variables of every condition: the Event fields,
@@ -66,10 +68,17 @@ var reserved = []string{
 	"return", "var", "void", "while",
 }
 
+// maxLoggedConditionErrors is the number of evaluation errors logged per
+// condition; the others are only logged with -v -v.
+const maxLoggedConditionErrors = 10
+
 // Condition is a CEL expression evaluated on an event: a source drops the
-// events for which its exclude_if condition is true.
+// events for which its exclude_if condition is true, a rule ignores them.
 type Condition struct {
 	Text string
+	// Owner names the source or rule of the condition in the logs, e.g.
+	// `source "nginx"`.
+	Owner string
 	// Groups are the regexp groups available as variables: their value is
 	// the string in Event.Fields, or "" when the group did not match.
 	Groups []string
@@ -137,6 +146,25 @@ func CompileCondition(text string, groups []string, lists map[string]*List) (*Co
 		return nil, err
 	}
 	return c, nil
+}
+
+// Excludes tells whether the condition is true for an event. An evaluation
+// error keeps the event (better analyze an event too many) and is logged.
+func (c *Condition) Excludes(ev *event.Event) bool {
+	match, err := c.Match(ev)
+	if err != nil {
+		switch n := c.errors.Add(1); {
+		case n <= maxLoggedConditionErrors || verbose.Level >= 2:
+			log.Printf("%s: exclude_if: %v (event kept: %q)", c.Owner, err, ev.Raw)
+		case n == maxLoggedConditionErrors+1:
+			log.Printf("%s: exclude_if: more errors, not logged (use -v -v to see them all)", c.Owner)
+		}
+		return false
+	}
+	if match {
+		verbose.Debugf("%s: exclude_if is true for an event from %s", c.Owner, ev.Source)
+	}
+	return match
 }
 
 // Match evaluates the condition on an event.

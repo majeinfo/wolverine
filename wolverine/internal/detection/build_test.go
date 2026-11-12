@@ -14,7 +14,7 @@ func TestBuildRulesFromShippedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules, err := BuildRules(cfg.Rules)
+	rules, err := BuildRules(cfg.Rules, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,18 +51,18 @@ func TestBuildRulesErrors(t *testing.T) {
 	for _, tt := range tests {
 		r := ok
 		tt.mod(&r)
-		if _, err := BuildRules([]config.Rule{r}); err == nil || !strings.Contains(err.Error(), tt.want) {
+		if _, err := BuildRules([]config.Rule{r}, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: got error %v, want it to contain %q", tt.name, err, tt.want)
 		}
 	}
 
-	if _, err := BuildRules([]config.Rule{ok, ok}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if _, err := BuildRules([]config.Rule{ok, ok}, nil); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Errorf("duplicate ids: got %v", err)
 	}
 
 	disabled := ok
 	disabled.Disabled = true
-	if rules, err := BuildRules([]config.Rule{disabled}); err != nil || len(rules) != 0 {
+	if rules, err := BuildRules([]config.Rule{disabled}, nil); err != nil || len(rules) != 0 {
 		t.Errorf("disabled rule: got %v, %v", rules, err)
 	}
 }

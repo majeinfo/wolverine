@@ -20,6 +20,9 @@ type Match struct {
 	// Exclude lists the exclude lists whose events are ignored (see
 	// Event.ExcludedBy).
 	Exclude []string
+	// ExcludeIf, if set, ignores the events for which it returns true. It
+	// is called last, only for the events that match otherwise.
+	ExcludeIf func(*event.Event) bool
 }
 
 func (m Match) Matches(ev *event.Event) bool {
@@ -44,6 +47,9 @@ func (m Match) Matches(ev *event.Event) bool {
 		if slices.Contains(m.Exclude, id) {
 			return false
 		}
+	}
+	if m.ExcludeIf != nil && m.ExcludeIf(ev) {
+		return false
 	}
 	return true
 }

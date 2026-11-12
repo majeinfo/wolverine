@@ -253,4 +253,8 @@ rules:
     window: 5m
     suppress: 1h         # at most one alert per IP and per hour
     exclude: [trusted]   # ignore the failures from these addresses
+    # The rule also ignores the events for which this CEL expression is
+    # true (same variables as a source's exclude_if, with the regexp groups
+    # of every source). Other rules still see them.
+    # exclude_if: username == "deploy" && in_list(source_ip, "trusted")
     actions: [email-admin, block-ip, webhook, slack]

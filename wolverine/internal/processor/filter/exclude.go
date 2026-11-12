@@ -11,7 +11,6 @@ package filter
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/netip"
 	"slices"
 	"strings"
@@ -129,10 +128,6 @@ func parseAddress(s string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
-// maxLoggedConditionErrors is the number of evaluation errors logged per
-// condition; the others are only logged with -v -v.
-const maxLoggedConditionErrors = 10
-
 // Exclude drops the events that are in a list of their source or match its
 // condition, and records
 // in the others the lists of the rules whose field holds one of their
@@ -172,18 +167,7 @@ func (x *Exclude) Process(_ context.Context, ev *event.Event) (*event.Event, err
 		}
 	}
 	if cond != nil {
-		match, err := cond.Match(ev)
-		if err != nil {
-			// The event is kept: better analyze an event too many.
-			switch n := cond.errors.Add(1); {
-			case n <= maxLoggedConditionErrors || verbose.Level >= 2:
-				log.Printf("source %s: exclude_if: %v (event kept: %q)", ev.Source, err, ev.Raw)
-			case n == maxLoggedConditionErrors+1:
-				log.Printf("source %s: exclude_if: more errors, not logged (use -v -v to see them all)", ev.Source)
-			}
-		}
-		if match {
-			verbose.Debugf("event from %s dropped: exclude_if is true", ev.Source)
+		if cond.Excludes(ev) {
 			return nil, nil
 		}
 	}

@@ -480,6 +480,8 @@ events with the same `group_by` value occur within `window`:
   no suppression).
 - **`exclude`**: the ids of the [exclude lists](#exclude-lists) whose
   events the rule ignores.
+- **`exclude_if`**: a [condition](#exclude_if-conditions); the rule ignores
+  the events for which it is true.
 - **`actions`**: the ids of the actions to run.
 
 The example rule only counts `Failed <method> for ...` messages, which are
@@ -665,9 +667,14 @@ your admin workstations, monitoring hosts, gateways...
 
 ### `exclude_if` conditions
 
-A source's `exclude_if` is an expression in
-[CEL](https://cel.dev) (Common Expression Language). The events of the
-source for which it is true are dropped, like those of its `exclude` lists:
+`exclude_if` is an expression in [CEL](https://cel.dev) (Common Expression
+Language), on a source or a rule:
+
+- **Source:** the events of the source for which it is true are dropped,
+  like those of its `exclude` lists. No rule sees them.
+- **Rule:** the rule ignores the events for which it is true, like those of
+  its `exclude` lists. Other rules still see them. The condition is only
+  evaluated for the events that match the rule otherwise.
 
 ```yaml
 sources:
@@ -680,6 +687,14 @@ sources:
       in_list(source_ip, "scanners")
       || user_agent.matches("(?i)(curl|python-requests|bot)")
       || (path == "/health" && method == "GET")
+
+rules:
+  - id: ssh-failed-logins-per-ip
+    exclude: [trusted]
+    # The deploy account may fail from the CI runners; the rule
+    # ignores those failures, other rules still count them.
+    exclude_if: username == "deploy" && in_list(source_ip, "ci-runners")
+    ...
 ```
 
 - **Variables:**
@@ -688,7 +703,7 @@ sources:
   |---|---|
   | `source_ip`, `dest_ip`, `hostname`, `service`, `username`, `action`, `status`, `category`, `severity`, `message`, `raw`, `source` | the event fields, as strings (`""` when unset) |
   | `timestamp` | the event time: `timestamp.getHours() < 6` |
-  | the other groups of the source's `regexp` | strings: `user_agent`, `method`, `path` above (`""` when the group did not match) |
+  | the other groups of the source's `regexp` (for a rule: of every enabled source's) | strings: `user_agent`, `method`, `path` above (`""` when the group did not match, or the event's source has no such group) |
   | `fields` | every other field, e.g. `fields.file`, `fields.auth_method` (sshd), `fields.pid` (journal) |
 
   A group whose name is not a valid identifier, or a CEL word such as `in`,
@@ -707,7 +722,7 @@ sources:
   return `true` or `false`.
 - **Errors while running** (a missing key of `fields`...) keep the event:
   wolverine would rather analyze an event too many. The first 10 errors of
-  a source are logged, all of them with `-v -v`.
+  each condition are logged, all of them with `-v -v`.
 - **YAML:** write the expression after `>-` to split it over several lines,
   or in single quotes on one line.
 

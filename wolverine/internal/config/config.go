@@ -206,6 +206,9 @@ type Rule struct {
 	// Exclude lists the ids of the exclude lists whose events the rule
 	// ignores.
 	Exclude []string `yaml:"exclude"`
+	// ExcludeIf is a CEL expression: the rule ignores the events for which
+	// it is true.
+	ExcludeIf string `yaml:"exclude_if"`
 
 	// threshold
 	GroupBy string        `yaml:"group_by"`

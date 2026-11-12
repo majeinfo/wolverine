@@ -94,6 +94,9 @@ func describe(cfg *config.Config) {
 		verbose.Infof("rule %s: %s, %d events per %s within %s (suppress: %s), exclude: %s, actions: %s",
 			r.ID, r.Type, r.Count, r.GroupBy, r.Window, r.Suppress,
 			or(strings.Join(r.Exclude, ", "), "none"), or(strings.Join(r.Actions, ", "), "none"))
+		if r.ExcludeIf != "" {
+			verbose.Infof("rule %s: exclude_if: %s", r.ID, r.ExcludeIf)
+		}
 		verbose.Debugf("rule %s: match %+v", r.ID, r.Match)
 	}
 

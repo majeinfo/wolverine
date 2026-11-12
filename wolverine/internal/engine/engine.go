@@ -59,11 +59,11 @@ func New(cfg *config.Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	exclude, err := buildExclude(cfg)
+	exclude, ruleConditions, err := buildExclude(cfg)
 	if err != nil {
 		return nil, err
 	}
-	rules, err := detection.BuildRules(cfg.Rules)
+	rules, err := detection.BuildRules(cfg.Rules, ruleConditions)
 	if err != nil {
 		return nil, err
 	}
@@ -100,20 +100,31 @@ func New(cfg *config.Config) (*Engine, error) {
 	return e, nil
 }
 
-// buildExclude resolves the exclude lists and checks those the sources and
-// rules name. The processor only checks the lists of the enabled ones.
-func buildExclude(cfg *config.Config) (*filter.Exclude, error) {
+// buildExclude resolves the exclude lists, checks those the sources and
+// rules name, and compiles their exclude_if conditions. The processor only
+// checks the lists of the enabled ones. The rules' conditions are returned
+// by rule id.
+func buildExclude(cfg *config.Config) (*filter.Exclude, map[string]func(*event.Event) bool, error) {
 	lists, err := filter.BuildLists(cfg.ExcludeLists)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	x := &filter.Exclude{Sources: map[string][]*filter.List{}, Conditions: map[string]*filter.Condition{}}
+	// A rule sees the events of every source: its conditions can use the
+	// groups of all their regexps.
+	var allGroups []string
+	for _, s := range cfg.Sources {
+		if !s.Disabled {
+			allGroups = append(allGroups, regexpGroups(s.Regexp)...)
+		}
+	}
 	for _, s := range cfg.Sources {
 		if s.ExcludeIf != "" {
 			cond, err := filter.CompileCondition(s.ExcludeIf, regexpGroups(s.Regexp), lists)
 			if err != nil {
-				return nil, fmt.Errorf("source %q: exclude_if: %w", s.ID, err)
+				return nil, nil, fmt.Errorf("source %q: exclude_if: %w", s.ID, err)
 			}
+			cond.Owner = fmt.Sprintf("source %q", s.ID)
 			if !s.Disabled {
 				x.Conditions[s.ID] = cond
 			}
@@ -121,7 +132,7 @@ func buildExclude(cfg *config.Config) (*filter.Exclude, error) {
 		for _, id := range s.Exclude {
 			l, ok := lists[id]
 			if !ok {
-				return nil, fmt.Errorf("source %q: exclude: unknown exclude list %q", s.ID, id)
+				return nil, nil, fmt.Errorf("source %q: exclude: unknown exclude list %q", s.ID, id)
 			}
 			if !s.Disabled && !slices.Contains(x.Sources[s.ID], l) {
 				x.Sources[s.ID] = append(x.Sources[s.ID], l)
@@ -129,11 +140,20 @@ func buildExclude(cfg *config.Config) (*filter.Exclude, error) {
 		}
 	}
 	used := map[string]bool{}
+	ruleConditions := map[string]func(*event.Event) bool{}
 	for _, r := range cfg.Rules {
+		if r.ExcludeIf != "" {
+			cond, err := filter.CompileCondition(r.ExcludeIf, allGroups, lists)
+			if err != nil {
+				return nil, nil, fmt.Errorf("rule %q: exclude_if: %w", r.ID, err)
+			}
+			cond.Owner = fmt.Sprintf("rule %q", r.ID)
+			ruleConditions[r.ID] = cond.Excludes
+		}
 		for _, id := range r.Exclude {
 			l, ok := lists[id]
 			if !ok {
-				return nil, fmt.Errorf("rule %q: exclude: unknown exclude list %q", r.ID, id)
+				return nil, nil, fmt.Errorf("rule %q: exclude: unknown exclude list %q", r.ID, id)
 			}
 			if !r.Disabled && !used[id] {
 				used[id] = true
@@ -141,7 +161,7 @@ func buildExclude(cfg *config.Config) (*filter.Exclude, error) {
 			}
 		}
 	}
-	return x, nil
+	return x, ruleConditions, nil
 }
 
 // resume gives each source its saved positions.
