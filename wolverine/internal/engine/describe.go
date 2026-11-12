@@ -84,7 +84,7 @@ func describe(cfg *config.Config) {
 		if l.Description != "" {
 			desc = " (" + l.Description + ")"
 		}
-		verbose.Infof("exclude list %s%s: %s", l.ID, desc, or(strings.Join(l.Entries, ", "), "empty"))
+		verbose.Infof("exclude list %s%s: %s in %s", l.ID, desc, or(l.Field, "SourceIP"), or(strings.Join(l.Entries, ", "), "nothing"))
 	}
 
 	for _, r := range cfg.Rules {

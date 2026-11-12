@@ -605,6 +605,9 @@ exclude_lists:
   - id: trusted
     description: addresses never blocked
     entries: [localhost, admins, 198.51.100.10]
+  - id: internal-targets
+    field: DestIP             # default: SourceIP
+    entries: [10.0.0.0/8]
 
 rules:
   - id: ssh-failed-logins-per-ip
@@ -623,12 +626,18 @@ monitoring hosts, gateways...
   file of the [configuration directory](#configuration-directory). A list
   that includes itself, directly or not, is an error. Quote IPv6 addresses
   inside `[...]`: `'::1'`.
+- **Field:** `field` is the event field that holds the address to check:
+  `SourceIP` (the default), `DestIP`, or a key of `Fields` set by a source's
+  regexp (e.g. `client_ip` behind a proxy). The names are those of
+  `group_by`. An event whose field is empty or not an IP address is not in
+  the list. The entries of an included list are checked against the field
+  of the list that includes it.
 - **Per rule:** a rule's `exclude` names the lists whose events it ignores.
   Excluded events are not counted, so they never raise an alert or run the
   rule's actions. The other rules still see them.
-- **Pipeline:** after parsing and enrichment, a filter checks the event's
-  `SourceIP` against the lists that enabled rules use, and records the lists
-  it is in. With `-events FILE`, they appear in the event's `ExcludedBy`;
+- **Pipeline:** after parsing and enrichment, a filter checks the event
+  against the lists that enabled rules use, each on its field, and records
+  the lists it is in. With `-events FILE`, they appear in the event's `ExcludedBy`;
   with `-v -v`, they are logged.
 - **Replaces `allowlist`:** earlier versions had a single `allowlist` that
   only stopped the `ssh` actions (and webhooks with `use_allowlist`). A

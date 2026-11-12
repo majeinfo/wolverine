@@ -47,6 +47,7 @@ func TestBuildListsErrors(t *testing.T) {
 		{"bad prefix", []config.ExcludeList{{ID: "a", Entries: []string{"10.0.0.0/33"}}}, "10.0.0.0/33"},
 		{"mapped prefix", []config.ExcludeList{{ID: "a", Entries: []string{"::ffff:10.0.0.0/104"}}}, "IPv4 form"},
 		{"unknown list", []config.ExcludeList{{ID: "a", Entries: []string{"nope"}}}, `"nope"`},
+		{"field spaces", []config.ExcludeList{{ID: "a", Field: " DestIP"}}, "unexpected spaces"},
 		{"self", []config.ExcludeList{{ID: "a", Entries: []string{"a"}}}, "a -> a"},
 		{"cycle", []config.ExcludeList{
 			{ID: "a", Entries: []string{"10.0.0.1", "b"}},
@@ -90,5 +91,38 @@ func TestExclude(t *testing.T) {
 
 	if !lists["admins"].Contains(netip.MustParseAddr("10.9.9.9")) {
 		t.Error("admins includes local")
+	}
+}
+
+func TestExcludeField(t *testing.T) {
+	lists, err := BuildLists([]config.ExcludeList{
+		{ID: "lan", Entries: []string{"10.0.0.0/8"}},
+		// The included list's addresses are checked against this list's
+		// field.
+		{ID: "lan-dest", Field: "DestIP", Entries: []string{"lan"}},
+		{ID: "proxied", Field: "client_ip", Entries: []string{"192.0.2.0/24"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lists["lan"].Field != "SourceIP" || lists["lan-dest"].Field != "DestIP" {
+		t.Fatalf("fields %q %q", lists["lan"].Field, lists["lan-dest"].Field)
+	}
+	x := &Exclude{Lists: []*List{lists["lan"], lists["lan-dest"], lists["proxied"]}}
+	for _, tt := range []struct {
+		ev   event.Event
+		want string
+	}{
+		{event.Event{SourceIP: "10.1.1.1", DestIP: "203.0.113.1"}, "lan"},
+		{event.Event{SourceIP: "203.0.113.1", DestIP: "10.1.1.1"}, "lan-dest"},
+		{event.Event{SourceIP: "10.1.1.1", DestIP: "10.2.2.2"}, "lan,lan-dest"},
+		{event.Event{SourceIP: "203.0.113.1", Fields: map[string]any{"client_ip": "192.0.2.7"}}, "proxied"},
+		{event.Event{Fields: map[string]any{"client_ip": "10.1.1.1"}}, ""},
+		{event.Event{Fields: map[string]any{"client_ip": 42}}, ""},
+	} {
+		ev, _ := x.Process(context.Background(), &tt.ev)
+		if got := strings.Join(ev.ExcludedBy, ","); got != tt.want {
+			t.Errorf("%+v: excluded by %q, want %q", tt.ev, got, tt.want)
+		}
 	}
 }

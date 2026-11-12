@@ -3,9 +3,12 @@
 # Exclude lists: named lists of IP addresses and CIDR ranges that rules can
 # ignore. An entry may also be the id of another exclude list, whose entries
 # are added. After parsing, each event is checked against the lists used by
-# the rules (on its source IP); a rule ignores the events whose source IP is
-# in one of the lists of its "exclude": they are not counted, so they never
-# raise an alert or trigger its actions. Other rules still see them.
+# the rules; a rule ignores the events that are in one of the lists of its
+# "exclude": they are not counted, so they never raise an alert or trigger
+# its actions. Other rules still see them.
+# "field" is the event field holding the address to check: SourceIP (the
+# default), DestIP, or a key of Fields from a source's regexp (same names as
+# group_by). Included lists are checked against the including list's field.
 # Add your own admin addresses, monitoring hosts, gateways...
 exclude_lists:
   - id: localhost
@@ -13,6 +16,7 @@ exclude_lists:
     entries: [127.0.0.0/8, '::1']     # quote IPv6 addresses in [...]
   # - id: admins
   #   description: administrators' networks
+  #   field: SourceIP     # the default
   #   entries: [192.168.1.0/24, '2001:db8:1::/48']
   - id: trusted
     description: addresses never blocked

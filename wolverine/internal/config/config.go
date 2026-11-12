@@ -36,11 +36,15 @@ type Config struct {
 	Files []string `yaml:"-"`
 }
 
-// ExcludeList is a named list of IP addresses: the events whose source IP is
+// ExcludeList is a named list of IP addresses: the events whose Field is
 // in it are ignored by the rules that name the list in their exclude.
 type ExcludeList struct {
 	ID          string `yaml:"id"`
 	Description string `yaml:"description"`
+	// Field is the event field holding the IP address to check: an Event
+	// field name (SourceIP, DestIP...) or a key of Event.Fields. Default:
+	// SourceIP.
+	Field string `yaml:"field"`
 	// Entries are IP addresses, CIDR ranges, or ids of other exclude lists
 	// whose entries are added.
 	Entries []string `yaml:"entries"`
