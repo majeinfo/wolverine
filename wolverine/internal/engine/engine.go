@@ -107,8 +107,17 @@ func buildExclude(cfg *config.Config) (*filter.Exclude, error) {
 	if err != nil {
 		return nil, err
 	}
-	x := &filter.Exclude{Sources: map[string][]*filter.List{}}
+	x := &filter.Exclude{Sources: map[string][]*filter.List{}, Conditions: map[string]*filter.Condition{}}
 	for _, s := range cfg.Sources {
+		if s.ExcludeIf != "" {
+			cond, err := filter.CompileCondition(s.ExcludeIf, regexpGroups(s.Regexp), lists)
+			if err != nil {
+				return nil, fmt.Errorf("source %q: exclude_if: %w", s.ID, err)
+			}
+			if !s.Disabled {
+				x.Conditions[s.ID] = cond
+			}
+		}
 		for _, id := range s.Exclude {
 			l, ok := lists[id]
 			if !ok {

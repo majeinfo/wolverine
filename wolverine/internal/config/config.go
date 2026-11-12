@@ -108,6 +108,9 @@ type Source struct {
 	// Exclude lists the ids of the exclude lists whose events are dropped
 	// from this source: no rule sees them.
 	Exclude []string `yaml:"exclude"`
+	// ExcludeIf is a CEL expression: the events of this source for which it
+	// is true are dropped too.
+	ExcludeIf string `yaml:"exclude_if"`
 }
 
 // AWS holds the credentials and region of an aws-s3 source. Without any of

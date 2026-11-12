@@ -82,6 +82,17 @@ sources:
   #   regexp: '^(?P<source_ip>\S+) \S+ (?P<username>\S+) \[(?P<timestamp>[^\]]+)\] "(?P<method>\S+) (?P<path>\S+)[^"]*" (?P<status>\d{3}) .*$'
   #   timestamp_formats: ["02/Jan/2006:15:04:05 -0700"]
   #   category: web
+  #   # Drop events before any rule sees them: those of exclude lists
+  #   # (exclude_lists above), and those for which exclude_if, a CEL
+  #   # expression (https://cel.dev), is true. Its variables: source_ip,
+  #   # dest_ip, hostname, service, username, action, status, category,
+  #   # severity, message, raw, source, timestamp, the other regexp groups
+  #   # (method, path... here), and fields (all the other fields).
+  #   # in_list(address, "list id") tests an exclude list.
+  #   exclude: [localhost]
+  #   exclude_if: >-
+  #     in_list(source_ip, "trusted")
+  #     || path == "/health"
 
   # "path" may name the file after the date, with macros in the file name:
   # ${year}, ${month}, ${day}, ${hour}, ${minute}, ${second}, or an

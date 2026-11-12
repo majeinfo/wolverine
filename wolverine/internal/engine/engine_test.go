@@ -209,6 +209,53 @@ func TestRunSourceExcludeLists(t *testing.T) {
 	}
 }
 
+// A source's exclude_if drops the events for which it is true, alongside
+// its exclude lists.
+func TestRunSourceExcludeIf(t *testing.T) {
+	dir := t.TempDir()
+	lines := []string{
+		`192.0.2.1 "GET /login" 401 "Mozilla/5.0"`,     // scanners list
+		`203.0.113.7 "GET /login" 401 "curl/8.5"`,      // user agent
+		`203.0.113.7 "GET /health" 401 "Mozilla/5.0"`,  // path
+		`203.0.113.7 "GET /login" 401 "Mozilla/5.0"`,   // kept
+		`198.51.100.4 "POST /login" 401 "Mozilla/5.0"`, // kept
+	}
+	path := filepath.Join(dir, "access.log")
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+
+	src := logfile(path)
+	src.Regexp = `^(?P<source_ip>\S+) "(?P<method>\S+) (?P<path>\S+)" (?P<status>\d+) "(?P<user_agent>[^"]*)"$`
+	src.ExcludeIf = `in_list(source_ip, "scanners") || user_agent.matches("(?i)curl|bot") || path == "/health"`
+	cfg := &config.Config{
+		ExcludeLists: []config.ExcludeList{{ID: "scanners", Entries: []string{"192.0.2.0/24"}}},
+		Sources:      []config.Source{src},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events bytes.Buffer
+	eng.Events = &events
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	dec := json.NewDecoder(&events)
+	for dec.More() {
+		var ev event.Event
+		if err := dec.Decode(&ev); err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, ev.Raw)
+	}
+	if want := lines[3] + "," + lines[4]; strings.Join(kept, ",") != want {
+		t.Errorf("kept %q, want %q", kept, want)
+	}
+	if n := eng.inputs[0].excluded.Load(); n != 3 {
+		t.Errorf("%d excluded, want 3", n)
+	}
+}
+
 func TestBuildExcludeErrors(t *testing.T) {
 	cfg := &config.Config{
 		Sources:      []config.Source{logfile("/var/log/messages")},
@@ -226,6 +273,17 @@ func TestBuildExcludeErrors(t *testing.T) {
 	cfg.Sources[0].Exclude = []string{"nope"}
 	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), `source "messages": exclude: unknown exclude list "nope"`) {
 		t.Errorf("unknown list in a source: got %v", err)
+	}
+	cfg.Sources[0].Exclude = nil
+	for expr, want := range map[string]string{
+		`user_agent == "x"`:       "undeclared reference to 'user_agent'",
+		`in_list(source_ip, "b")`: `unknown exclude list "b"`,
+		`message`:                 "must be true or false",
+	} {
+		cfg.Sources[0].ExcludeIf = expr
+		if _, err := New(cfg); err == nil || !strings.HasPrefix(err.Error(), `source "messages": exclude_if: `) || !strings.Contains(err.Error(), want) {
+			t.Errorf("exclude_if %s: got %v", expr, err)
+		}
 	}
 }
 

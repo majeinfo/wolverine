@@ -23,6 +23,7 @@ within 5 minutes.
   - [Rules](#rules)
   - [Actions](#actions)
   - [Exclude lists](#exclude-lists)
+  - [`exclude_if` conditions](#exclude_if-conditions)
   - [State file](#state-file)
 - [Install as a service](#install-as-a-service)
 - [Project layout](#project-layout)
@@ -156,8 +157,9 @@ Every source has an `id`, a `type`, `follow` and `start_at`:
 When the [state file](#state-file) knows a source, its saved position is used
 instead of `start_at`.
 
-Any source can also have an `exclude`: the [exclude lists](#exclude-lists)
-whose events are dropped from this source, before any rule sees them.
+Any source can also drop events before any rule sees them: `exclude` names
+[exclude lists](#exclude-lists), and `exclude_if` is a
+[condition](#exclude_if-conditions) on the event's fields.
 
 #### `logfile`: log files
 
@@ -660,6 +662,54 @@ your admin workstations, monitoring hosts, gateways...
   configuration that still uses `allowlist` or `use_allowlist` is refused
   with a message pointing here. To keep the same protection, define a list
   and add it to the `exclude` of every rule that runs a blocking action.
+
+### `exclude_if` conditions
+
+A source's `exclude_if` is an expression in
+[CEL](https://cel.dev) (Common Expression Language). The events of the
+source for which it is true are dropped, like those of its `exclude` lists:
+
+```yaml
+sources:
+  - id: nginx
+    type: logfile
+    path: /var/log/nginx/access.log
+    regexp: '^(?P<source_ip>\S+) \S+ (?P<username>\S+) \[(?P<timestamp>[^\]]+)\] "(?P<method>\S+) (?P<path>\S+)[^"]*" (?P<status>\d{3}) \S+ "[^"]*" "(?P<user_agent>[^"]*)"$'
+    exclude: [localhost]
+    exclude_if: >-
+      in_list(source_ip, "scanners")
+      || user_agent.matches("(?i)(curl|python-requests|bot)")
+      || (path == "/health" && method == "GET")
+```
+
+- **Variables:**
+
+  | Variable | Value |
+  |---|---|
+  | `source_ip`, `dest_ip`, `hostname`, `service`, `username`, `action`, `status`, `category`, `severity`, `message`, `raw`, `source` | the event fields, as strings (`""` when unset) |
+  | `timestamp` | the event time: `timestamp.getHours() < 6` |
+  | the other groups of the source's `regexp` | strings: `user_agent`, `method`, `path` above (`""` when the group did not match) |
+  | `fields` | every other field, e.g. `fields.file`, `fields.auth_method` (sshd), `fields.pid` (journal) |
+
+  A group whose name is not a valid identifier, or a CEL word such as `in`,
+  is only in `fields`: `fields["in"]`.
+- **Missing fields:** `fields.x` is an error when the event has no `x`.
+  Test it with `has(fields.x)` or use `fields.?x.orValue("")`.
+- **Functions:** CEL's standard ones (`matches` with RE2 syntax,
+  `startsWith`, `endsWith`, `contains`, `in [...]`, `size`, comparisons,
+  `&&`, `||`, `!`...), the
+  [string extensions](https://pkg.go.dev/cel.dev/cel-go/ext#Strings)
+  (`lowerAscii`, `split`, `substring`...), and `in_list(address, "list")`,
+  which tells whether an address is in an [exclude list](#exclude-lists).
+- **Checked at startup:** syntax, variable names, types (`status == 200` is
+  an error: `status` is a string), regular expressions, and the lists
+  named in `in_list`, which must be written in quotes. The expression must
+  return `true` or `false`.
+- **Errors while running** (a missing key of `fields`...) keep the event:
+  wolverine would rather analyze an event too many. The first 10 errors of
+  a source are logged, all of them with `-v -v`.
+- **YAML:** write the expression after `>-` to split it over several lines,
+  or in single quotes on one line.
 
 ### State file
 

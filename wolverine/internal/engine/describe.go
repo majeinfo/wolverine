@@ -56,14 +56,7 @@ func describe(cfg *config.Config) {
 		}
 		verbose.Infof("source %s: %s %s (follow: %v, start at %s)", s.ID, s.Type, target, s.Follow, startAt)
 		if s.Regexp != "" {
-			re := regexp.MustCompile(s.Regexp) // already validated
-			var groups []string
-			for _, g := range re.SubexpNames() {
-				if g != "" {
-					groups = append(groups, g)
-				}
-			}
-			verbose.Infof("source %s: regexp groups: %s", s.ID, strings.Join(groups, ", "))
+			verbose.Infof("source %s: regexp groups: %s", s.ID, strings.Join(regexpGroups(s.Regexp), ", "))
 			verbose.Debugf("source %s: regexp: %s", s.ID, s.Regexp)
 		}
 		if s.Type == "logfile" {
@@ -77,6 +70,9 @@ func describe(cfg *config.Config) {
 		verbose.Debugf("source %s: category: %s", s.ID, or(s.Category, "system"))
 		if len(s.Exclude) > 0 {
 			verbose.Infof("source %s: exclude: %s", s.ID, strings.Join(s.Exclude, ", "))
+		}
+		if s.ExcludeIf != "" {
+			verbose.Infof("source %s: exclude_if: %s", s.ID, s.ExcludeIf)
 		}
 	}
 
@@ -110,6 +106,21 @@ func describe(cfg *config.Config) {
 	}
 
 	verbose.Infof("state file: %s", or(cfg.StateFile, "none (sources start from start_at on every run)"))
+}
+
+// regexpGroups returns the names of the groups of a source's regexp.
+func regexpGroups(expr string) []string {
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return nil // reported when the source is built
+	}
+	var groups []string
+	for _, g := range re.SubexpNames() {
+		if g != "" {
+			groups = append(groups, g)
+		}
+	}
+	return groups
 }
 
 // actionTarget tells where an action goes, without revealing secrets.

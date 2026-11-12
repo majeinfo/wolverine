@@ -11,6 +11,7 @@ package filter
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/netip"
 	"slices"
 	"strings"
@@ -128,12 +129,20 @@ func parseAddress(s string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
-// Exclude drops the events that are in a list of their source, and records
+// maxLoggedConditionErrors is the number of evaluation errors logged per
+// condition; the others are only logged with -v -v.
+const maxLoggedConditionErrors = 10
+
+// Exclude drops the events that are in a list of their source or match its
+// condition, and records
 // in the others the lists of the rules whose field holds one of their
 // addresses.
 type Exclude struct {
 	// Sources maps a source id to the lists whose events are dropped.
 	Sources map[string][]*List
+	// Conditions maps a source id to its exclude_if condition: the events
+	// for which it is true are dropped.
+	Conditions map[string]*Condition
 	// Lists are the lists to record: those the rules use.
 	Lists []*List
 }
@@ -142,7 +151,8 @@ func (*Exclude) Name() string { return "exclude" }
 
 func (x *Exclude) Process(_ context.Context, ev *event.Event) (*event.Event, error) {
 	sourceLists := x.Sources[ev.Source]
-	if len(sourceLists) == 0 && len(x.Lists) == 0 {
+	cond := x.Conditions[ev.Source]
+	if len(sourceLists) == 0 && cond == nil && len(x.Lists) == 0 {
 		return ev, nil
 	}
 	// Most lists check the same field: parse each field once.
@@ -158,6 +168,22 @@ func (x *Exclude) Process(_ context.Context, ev *event.Event) (*event.Event, err
 	for _, l := range sourceLists {
 		if addr, ok := in(l); ok {
 			verbose.Debugf("event from %s dropped: %s %s is in exclude list %s", ev.Source, l.Field, addr, l.ID)
+			return nil, nil
+		}
+	}
+	if cond != nil {
+		match, err := cond.Match(ev)
+		if err != nil {
+			// The event is kept: better analyze an event too many.
+			switch n := cond.errors.Add(1); {
+			case n <= maxLoggedConditionErrors || verbose.Level >= 2:
+				log.Printf("source %s: exclude_if: %v (event kept: %q)", ev.Source, err, ev.Raw)
+			case n == maxLoggedConditionErrors+1:
+				log.Printf("source %s: exclude_if: more errors, not logged (use -v -v to see them all)", ev.Source)
+			}
+		}
+		if match {
+			verbose.Debugf("event from %s dropped: exclude_if is true", ev.Source)
 			return nil, nil
 		}
 	}
