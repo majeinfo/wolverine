@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"wolverine/internal/config"
 	"wolverine/internal/event"
@@ -109,6 +110,79 @@ func TestRunShippedConfig(t *testing.T) {
 
 	if in := eng.inputs[0]; in.lines.Load() != 13 || in.unparsed.Load() != 1 {
 		t.Errorf("lines=%d unparsed=%d, want 13 and 1", in.lines.Load(), in.unparsed.Load())
+	}
+}
+
+// Each rule ignores the events whose source IP is in one of its exclude
+// lists, possibly through a list included in another; other rules still see
+// them.
+func TestRunExcludeLists(t *testing.T) {
+	dir := t.TempDir()
+	var log strings.Builder
+	for _, ip := range []string{"10.1.1.1", "10.1.1.1", "10.1.1.1", "192.0.2.9", "192.0.2.9", "192.0.2.9", "203.0.113.7", "203.0.113.7", "203.0.113.7"} {
+		fmt.Fprintf(&log, "Failed password for root from %s port 22 ssh2\n", ip)
+	}
+	path := filepath.Join(dir, "secure")
+	os.WriteFile(path, []byte(log.String()), 0o644)
+
+	src := logfile(path)
+	src.Regexp = `^Failed password for \S+ from (?P<source_ip>\S+) .*$`
+	src.Category = "authentication"
+	rule := func(id string, exclude ...string) config.Rule {
+		return config.Rule{ID: id, Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour, Exclude: exclude,
+			Match: config.Match{Category: "authentication"}}
+	}
+	cfg := &config.Config{
+		ExcludeLists: []config.ExcludeList{
+			{ID: "trusted", Entries: []string{"admins", "192.0.2.9"}},
+			{ID: "admins", Entries: []string{"10.0.0.0/8"}},
+			{ID: "unused", Entries: []string{"203.0.113.0/24"}},
+		},
+		Sources: []config.Source{src},
+		Rules:   []config.Rule{rule("strict", "trusted"), rule("lenient", "admins"), rule("all")},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, events bytes.Buffer
+	eng.Alerts, eng.Events = &out, &events
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	dec := json.NewDecoder(&out)
+	for dec.More() {
+		var a event.Alert
+		if err := dec.Decode(&a); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprint(a.RuleID, " ", a.Metadata["value"]))
+	}
+	want := "all 10.1.1.1,lenient 192.0.2.9,all 192.0.2.9,strict 203.0.113.7,lenient 203.0.113.7,all 203.0.113.7"
+	if strings.Join(got, ",") != want {
+		t.Errorf("alerts:\n%s\nwant:\n%s", strings.Join(got, ","), want)
+	}
+	// The events tell which lists they are in; the lists no rule uses are
+	// not checked.
+	if s := events.String(); !strings.Contains(s, `"ExcludedBy":["trusted","admins"]`) || !strings.Contains(s, `"ExcludedBy":["trusted"]`) || strings.Contains(s, "unused") {
+		t.Errorf("events:\n%s", s)
+	}
+}
+
+func TestBuildExcludeErrors(t *testing.T) {
+	cfg := &config.Config{
+		Sources:      []config.Source{logfile("/var/log/messages")},
+		ExcludeLists: []config.ExcludeList{{ID: "a", Entries: []string{"b"}}},
+	}
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), `exclude list "a": "b"`) {
+		t.Errorf("unknown list in a list: got %v", err)
+	}
+	cfg.ExcludeLists = []config.ExcludeList{{ID: "a"}}
+	cfg.Rules = []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 1, Window: time.Minute, Exclude: []string{"nope"}}}
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), `rule "r": exclude: unknown exclude list "nope"`) {
+		t.Errorf("unknown list in a rule: got %v", err)
 	}
 }
 

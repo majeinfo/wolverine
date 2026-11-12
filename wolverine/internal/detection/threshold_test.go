@@ -105,3 +105,26 @@ func TestSweepForgetsOldGroups(t *testing.T) {
 		t.Errorf("stale group not swept: %v", r.groups)
 	}
 }
+
+func TestExclude(t *testing.T) {
+	r := sshFailedLoginsPerIP(2, time.Minute)
+	r.Match.Exclude = []string{"admins"}
+	now := time.Now()
+	ev := func(by ...string) *event.Event {
+		e := failed("10.0.0.1", now)
+		e.ExcludedBy = by
+		return e
+	}
+
+	// Events excluded by one of the rule's lists are not counted.
+	for range 3 {
+		if alerts := r.Evaluate(ev("localhost", "admins")); len(alerts) != 0 {
+			t.Fatalf("excluded events raised %d alerts", len(alerts))
+		}
+	}
+	// Those of other lists are.
+	r.Evaluate(ev("localhost"))
+	if alerts := r.Evaluate(ev()); len(alerts) != 1 {
+		t.Fatalf("got %d alerts, want 1", len(alerts))
+	}
+}

@@ -8,14 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"wolverine/internal/action/allowlist"
 	"wolverine/internal/event"
 )
 
@@ -35,10 +33,6 @@ const (
 //
 // The URL may embed a secret (Slack, Teams...): only its scheme and host
 // appear in errors.
-//
-// When Allowlist is set, alerts involving an allowlisted IP are not sent:
-// use it for webhooks that block addresses (cloud firewall, WAF...), not for
-// notifications.
 type Webhook struct {
 	ID        string
 	URL       string
@@ -46,7 +40,6 @@ type Webhook struct {
 	Timeout   time.Duration
 	Retries   int
 	MaxEvents int
-	Allowlist allowlist.List
 	Body      *Body
 
 	// Client defaults to http.DefaultClient; RetryDelay to one second.
@@ -57,11 +50,6 @@ type Webhook struct {
 func (w *Webhook) Name() string { return w.ID }
 
 func (w *Webhook) Execute(ctx context.Context, alert *event.Alert) error {
-	if ip, ok := w.Allowlist.Match(alert); ok {
-		log.Printf("action %s: skipped for alert %s: %s is allowlisted", w.ID, alert.ID, ip)
-		return nil
-	}
-
 	var body []byte
 	var err error
 	if w.Body != nil {

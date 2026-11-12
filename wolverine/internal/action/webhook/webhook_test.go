@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"wolverine/internal/action/allowlist"
 	"wolverine/internal/event"
 )
 
@@ -126,22 +124,5 @@ func TestTimeout(t *testing.T) {
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("timeout not honoured: %s", d)
-	}
-}
-
-func TestAllowlist(t *testing.T) {
-	srv, calls, _, _ := server(t, 200)
-	w := &Webhook{URL: srv.URL, Allowlist: allowlist.List{netip.MustParsePrefix("10.0.0.0/8")}}
-	if err := w.Execute(context.Background(), testAlert("10.1.2.3", 1)); err != nil {
-		t.Fatal(err)
-	}
-	if calls.Load() != 0 {
-		t.Fatal("allowlisted IP: the webhook must not be called")
-	}
-	if err := w.Execute(context.Background(), testAlert("203.0.113.7", 1)); err != nil {
-		t.Fatal(err)
-	}
-	if calls.Load() != 1 {
-		t.Fatal("other IPs must be sent")
 	}
 }

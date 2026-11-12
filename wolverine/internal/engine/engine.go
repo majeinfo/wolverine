@@ -1,5 +1,5 @@
 // Package engine wires the pipeline together: sources -> parsers ->
-// processors -> detection rules -> actions.
+// processors (enrichment, then exclude lists) -> detection rules -> actions.
 package engine
 
 import (
@@ -20,6 +20,7 @@ import (
 	"wolverine/internal/parser"
 	"wolverine/internal/processor"
 	"wolverine/internal/processor/enrichment"
+	"wolverine/internal/processor/filter"
 	"wolverine/internal/source"
 	"wolverine/internal/state"
 	"wolverine/internal/verbose"
@@ -57,11 +58,15 @@ func New(cfg *config.Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	exclude, err := buildExclude(cfg)
+	if err != nil {
+		return nil, err
+	}
 	rules, err := detection.BuildRules(cfg.Rules)
 	if err != nil {
 		return nil, err
 	}
-	actions, err := action.Build(cfg.Actions, cfg.Allowlist)
+	actions, err := action.Build(cfg.Actions)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +77,7 @@ func New(cfg *config.Config) (*Engine, error) {
 	describe(cfg)
 	e := &Engine{
 		inputs:     inputs,
-		processors: []processor.Processor{enrichment.SSHD{}},
+		processors: []processor.Processor{enrichment.SSHD{}, exclude},
 		detector:   &detection.Engine{Rules: rules},
 		routes:     routes,
 	}
@@ -92,6 +97,30 @@ func New(cfg *config.Config) (*Engine, error) {
 		}
 	}
 	return e, nil
+}
+
+// buildExclude resolves the exclude lists and checks those the rules name.
+// The processor only checks the lists used by the enabled rules.
+func buildExclude(cfg *config.Config) (*filter.Exclude, error) {
+	lists, err := filter.BuildLists(cfg.ExcludeLists)
+	if err != nil {
+		return nil, err
+	}
+	x := &filter.Exclude{}
+	used := map[string]bool{}
+	for _, r := range cfg.Rules {
+		for _, id := range r.Exclude {
+			l, ok := lists[id]
+			if !ok {
+				return nil, fmt.Errorf("rule %q: exclude: unknown exclude list %q", r.ID, id)
+			}
+			if !r.Disabled && !used[id] {
+				used[id] = true
+				x.Lists = append(x.Lists, l)
+			}
+		}
+	}
+	return x, nil
 }
 
 // resume gives each source its saved positions.

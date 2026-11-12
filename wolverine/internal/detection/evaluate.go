@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	"wolverine/internal/event"
 )
@@ -16,6 +17,9 @@ type Match struct {
 	Status   string
 	// HasFields lists keys that must be present in Event.Fields.
 	HasFields []string
+	// Exclude lists the exclude lists whose events are ignored (see
+	// Event.ExcludedBy).
+	Exclude []string
 }
 
 func (m Match) Matches(ev *event.Event) bool {
@@ -33,6 +37,11 @@ func (m Match) Matches(ev *event.Event) bool {
 	}
 	for _, k := range m.HasFields {
 		if _, ok := ev.Fields[k]; !ok {
+			return false
+		}
+	}
+	for _, id := range ev.ExcludedBy {
+		if slices.Contains(m.Exclude, id) {
 			return false
 		}
 	}

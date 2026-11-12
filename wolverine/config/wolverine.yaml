@@ -1,13 +1,24 @@
 # Wolverine configuration.
 
-# IP addresses and CIDR ranges that blocking actions must never act on: ssh
-# actions, and webhooks with use_allowlist. Alerts are still raised and the
-# other actions (email, notification webhooks) still run.
+# Exclude lists: named lists of IP addresses and CIDR ranges that rules can
+# ignore. An entry may also be the id of another exclude list, whose entries
+# are added. After parsing, each event is checked against the lists used by
+# the rules (on its source IP); a rule ignores the events whose source IP is
+# in one of the lists of its "exclude": they are not counted, so they never
+# raise an alert or trigger its actions. Other rules still see them.
 # Add your own admin addresses, monitoring hosts, gateways...
-allowlist:
-  - 127.0.0.0/8
-  - ::1
-  # - 192.168.1.0/24
+exclude_lists:
+  - id: localhost
+    description: the machine itself
+    entries: [127.0.0.0/8, '::1']     # quote IPv6 addresses in [...]
+  # - id: admins
+  #   description: administrators' networks
+  #   entries: [192.168.1.0/24, '2001:db8:1::/48']
+  - id: trusted
+    description: addresses never blocked
+    entries:
+      - localhost
+      # - admins
 
 # Where the position of every source (offset in a log file, cursor in the
 # journal) is saved, so that a restart resumes after the last line or entry
@@ -18,8 +29,8 @@ state_file: /var/lib/wolverine/state.json
 
 # Directory of additional configuration files, relative to the directory of
 # this file. Every *.yaml and *.yml file in it is read, in lexical order
-# (10-ssh.yaml before 20-web.yaml), and its allowlist, sources, actions and
-# rules are added to those of this file. Hidden files and subdirectories are
+# (10-ssh.yaml before 20-web.yaml), and its exclude lists, sources, actions
+# and rules are added to those of this file. Hidden files and subdirectories are
 # ignored; state_file and include_dir can only be set here.
 # Without this setting, rules.d is used if it exists; "" disables it.
 include_dir: rules.d
@@ -180,7 +191,6 @@ actions:
       timeout: 10s
       retries: 2
     max_events: 20
-    use_allowlist: false                 # true if the webhook blocks IPs
 
   # Post a message to a Slack channel (incoming webhook). The webhook URL is
   # a secret: it is read from the environment and never logged.
@@ -224,4 +234,5 @@ rules:
     count: 3
     window: 5m
     suppress: 1h         # at most one alert per IP and per hour
+    exclude: [trusted]   # ignore the failures from these addresses
     actions: [email-admin, block-ip, webhook, slack]

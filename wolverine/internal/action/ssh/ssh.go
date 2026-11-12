@@ -13,7 +13,6 @@ import (
 	"text/template"
 	"time"
 
-	"wolverine/internal/action/allowlist"
 	"wolverine/internal/event"
 )
 
@@ -37,9 +36,6 @@ var Variables = []string{"AlertID", "RuleID", "Severity", "Value", "SourceIP", "
 //
 // A placeholder whose value is empty for an alert makes the action fail
 // rather than run the command with an empty argument.
-//
-// The command is not run when an IP address of the alert (the source IP of
-// its events, or its group value) is in Allowlist.
 type SSH struct {
 	ID           string
 	Host         string
@@ -48,7 +44,6 @@ type SSH struct {
 	IdentityFile string
 	Command      *template.Template
 	Timeout      time.Duration
-	Allowlist    allowlist.List
 	// Binary is the ssh client to run (default "ssh").
 	Binary string
 }
@@ -73,11 +68,6 @@ func ParseCommand(text string) (*template.Template, error) {
 func (s *SSH) Name() string { return s.ID }
 
 func (s *SSH) Execute(ctx context.Context, alert *event.Alert) error {
-	if ip, ok := s.Allowlist.Match(alert); ok {
-		log.Printf("action %s: skipped for alert %s: %s is allowlisted", s.ID, alert.ID, ip)
-		return nil
-	}
-
 	cmd, err := s.render(alert)
 	if err != nil {
 		return err

@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"wolverine/internal/action/allowlist"
 	"wolverine/internal/action/email"
 	"wolverine/internal/action/ssh"
 	"wolverine/internal/action/webhook"
@@ -17,12 +16,8 @@ import (
 
 // Build creates the actions described in the configuration. Disabled actions
 // are present in the map with a nil value, so that rules may still refer to
-// them. Blocking actions never act on the IP addresses in allowlistEntries.
-func Build(cfgs []config.Action, allowlistEntries []string) (map[string]Action, error) {
-	allowed, err := allowlist.Parse(allowlistEntries)
-	if err != nil {
-		return nil, err
-	}
+// them.
+func Build(cfgs []config.Action) (map[string]Action, error) {
 	actions := map[string]Action{}
 	for i, c := range cfgs {
 		if c.ID == "" {
@@ -35,7 +30,7 @@ func Build(cfgs []config.Action, allowlistEntries []string) (map[string]Action, 
 			actions[c.ID] = nil
 			continue
 		}
-		a, err := build(c, allowed)
+		a, err := build(c)
 		if err != nil {
 			return nil, fmt.Errorf("action %q: %w", c.ID, err)
 		}
@@ -44,14 +39,14 @@ func Build(cfgs []config.Action, allowlistEntries []string) (map[string]Action, 
 	return actions, nil
 }
 
-func build(c config.Action, allowed allowlist.List) (Action, error) {
+func build(c config.Action) (Action, error) {
 	switch c.Type {
 	case "email":
 		return buildEmail(c)
 	case "ssh":
-		return buildSSH(c, allowed)
+		return buildSSH(c)
 	case "webhook":
-		return buildWebhook(c, allowed)
+		return buildWebhook(c)
 	case "":
 		return nil, fmt.Errorf("missing type")
 	default:
@@ -100,7 +95,7 @@ func buildEmail(c config.Action) (Action, error) {
 	}, nil
 }
 
-func buildSSH(c config.Action, allowed allowlist.List) (Action, error) {
+func buildSSH(c config.Action) (Action, error) {
 	if c.SSH.Host == "" {
 		return nil, fmt.Errorf("ssh.host is required")
 	}
@@ -131,11 +126,10 @@ func buildSSH(c config.Action, allowed allowlist.List) (Action, error) {
 		IdentityFile: c.SSH.IdentityFile,
 		Command:      tmpl,
 		Timeout:      c.SSH.Timeout,
-		Allowlist:    allowed,
 	}, nil
 }
 
-func buildWebhook(c config.Action, allowed allowlist.List) (Action, error) {
+func buildWebhook(c config.Action) (Action, error) {
 	rawURL := c.Webhook.URL
 	switch {
 	case rawURL != "" && c.Webhook.URLEnv != "":
@@ -181,7 +175,7 @@ func buildWebhook(c config.Action, allowed allowlist.List) (Action, error) {
 		return nil, fmt.Errorf("webhook.escape is only used with webhook.body")
 	}
 
-	w := &webhook.Webhook{
+	return &webhook.Webhook{
 		ID:        c.ID,
 		URL:       rawURL,
 		Body:      body,
@@ -189,11 +183,7 @@ func buildWebhook(c config.Action, allowed allowlist.List) (Action, error) {
 		Timeout:   c.Webhook.Timeout,
 		Retries:   c.Webhook.Retries,
 		MaxEvents: c.MaxEvents,
-	}
-	if c.UseAllowlist {
-		w.Allowlist = allowed
-	}
-	return w, nil
+	}, nil
 }
 
 // Routes maps each enabled rule id to the actions it triggers.

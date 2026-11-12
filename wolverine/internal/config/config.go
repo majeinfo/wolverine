@@ -17,9 +17,9 @@ import (
 )
 
 type Config struct {
-	// Allowlist holds the IP addresses and CIDR ranges that blocking actions
-	// (ssh) must never act on.
-	Allowlist []string `yaml:"allowlist"`
+	// ExcludeLists are named lists of IP addresses that rules may ignore
+	// (Rule.Exclude).
+	ExcludeLists []ExcludeList `yaml:"exclude_lists"`
 	// StateFile is where the position of every source is saved, so that a
 	// restart resumes after the last line or entry processed. Optional.
 	StateFile string `yaml:"state_file"`
@@ -34,6 +34,16 @@ type Config struct {
 	// Files lists the files the configuration was read from: the main file
 	// first, then the included ones in the order they were read.
 	Files []string `yaml:"-"`
+}
+
+// ExcludeList is a named list of IP addresses: the events whose source IP is
+// in it are ignored by the rules that name the list in their exclude.
+type ExcludeList struct {
+	ID          string `yaml:"id"`
+	Description string `yaml:"description"`
+	// Entries are IP addresses, CIDR ranges, or ids of other exclude lists
+	// whose entries are added.
+	Entries []string `yaml:"entries"`
 }
 
 // DefaultIncludeDir is the include directory used when the main file does
@@ -136,9 +146,6 @@ type Action struct {
 
 	// webhook
 	Webhook Webhook `yaml:"webhook"`
-	// UseAllowlist skips the alerts involving an allowlisted IP (always on
-	// for ssh actions).
-	UseAllowlist bool `yaml:"use_allowlist"`
 }
 
 type Webhook struct {
@@ -186,6 +193,9 @@ type Rule struct {
 	Match       Match  `yaml:"match"`
 	// Actions lists the ids of the actions run when the rule fires.
 	Actions []string `yaml:"actions"`
+	// Exclude lists the ids of the exclude lists whose events the rule
+	// ignores.
+	Exclude []string `yaml:"exclude"`
 
 	// threshold
 	GroupBy string        `yaml:"group_by"`
@@ -205,8 +215,8 @@ type Match struct {
 }
 
 // Load reads the main configuration file, then the *.yaml and *.yml files of
-// its include directory in lexical order. The allowlist, sources, actions and
-// rules of the included files are added to those of the main file;
+// its include directory in lexical order. The exclude lists, sources, actions
+// and rules of the included files are added to those of the main file;
 // state_file and include_dir may only be set in the main file. Unknown keys
 // are rejected so that typos do not silently disable part of a rule.
 func Load(path string) (*Config, error) {
@@ -246,7 +256,7 @@ func Load(path string) (*Config, error) {
 		if err := ids.add(part, f); err != nil {
 			return nil, err
 		}
-		cfg.Allowlist = append(cfg.Allowlist, part.Allowlist...)
+		cfg.ExcludeLists = append(cfg.ExcludeLists, part.ExcludeLists...)
 		cfg.Sources = append(cfg.Sources, part.Sources...)
 		cfg.Actions = append(cfg.Actions, part.Actions...)
 		cfg.Rules = append(cfg.Rules, part.Rules...)
@@ -266,9 +276,35 @@ func loadFile(path string) (*Config, error) {
 
 	var cfg Config
 	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
+		if obsolete(data) {
+			return nil, fmt.Errorf("%s: allowlist and use_allowlist were replaced by exclude_lists and the exclude of each rule (see the README)", path)
+		}
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// obsolete reports whether a configuration file uses the allowlist settings
+// of earlier versions.
+func obsolete(data []byte) bool {
+	var old struct {
+		Allowlist any `yaml:"allowlist"`
+		Actions   []struct {
+			UseAllowlist any `yaml:"use_allowlist"`
+		} `yaml:"actions"`
+	}
+	if yaml.Unmarshal(data, &old) != nil {
+		return false
+	}
+	if old.Allowlist != nil {
+		return true
+	}
+	for _, a := range old.Actions {
+		if a.UseAllowlist != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // includedFiles returns the configuration files of dir, sorted by name:
@@ -302,12 +338,12 @@ func includedFiles(dir string, required bool) ([]string, error) {
 	return files, nil
 }
 
-// ids detects the sources, actions and rules defined twice, possibly in
+// ids detects the exclude lists, sources, actions and rules defined twice, possibly in
 // different files, and tells where.
 type ids map[string]map[string]string // kind -> id -> file
 
 func newIDs() ids {
-	return ids{"source": {}, "action": {}, "rule": {}}
+	return ids{"exclude list": {}, "source": {}, "action": {}, "rule": {}}
 }
 
 func (d ids) add(cfg *Config, file string) error {
@@ -323,6 +359,11 @@ func (d ids) add(cfg *Config, file string) error {
 		}
 		d[kind][id] = file
 		return nil
+	}
+	for _, l := range cfg.ExcludeLists {
+		if err := check("exclude list", l.ID); err != nil {
+			return err
+		}
 	}
 	for _, s := range cfg.Sources {
 		if err := check("source", s.ID); err != nil {

@@ -5,10 +5,10 @@ patterns and reacts to them: it sends an email, runs a command over ssh
 (e.g. to block an IP on a firewall) or calls a webhook (Slack...).
 
 ```
-sources ──> parser ──> enrichment ──> detection rules ──> actions
-logfile     regexp     sshd: user,    threshold:          email
-journal     journal    IP, method...  N events per IP     ssh command
-                                      within a window     webhook / Slack
+sources ──> parser ──> enrichment ──> exclude lists ──> detection rules ──> actions
+logfile     regexp     sshd: user,    source IP in      threshold:          email
+journal     journal    IP, method...  trusted lists?    N events per IP     ssh command
+aws-s3                                                  within a window     webhook / Slack
 ```
 
 Out of the box it detects SSH brute force: 5 failed logins from the same IP
@@ -22,7 +22,7 @@ within 5 minutes.
   - [Sources](#sources)
   - [Rules](#rules)
   - [Actions](#actions)
-  - [Allowlist](#allowlist)
+  - [Exclude lists](#exclude-lists)
   - [State file](#state-file)
 - [Install as a service](#install-as-a-service)
 - [Project layout](#project-layout)
@@ -97,17 +97,17 @@ counts the events.
 The configuration is a main YAML file with these sections:
 
 ```yaml
-allowlist:   [...]     # IPs that must never be blocked
-state_file:  ...       # where the position of each source is saved
-include_dir: rules.d   # directory of additional configuration files
-sources:     [...]     # where events come from
-actions:     [...]     # what to do when an alert fires
-rules:       [...]     # what to detect, and which actions to run
+exclude_lists: [...]     # named lists of IPs that rules can ignore
+state_file:    ...       # where the position of each source is saved
+include_dir:   rules.d   # directory of additional configuration files
+sources:       [...]     # where events come from
+actions:       [...]     # what to do when an alert fires
+rules:         [...]     # what to detect, and which actions to run
 ```
 
 [`config/wolverine.yaml`](config/wolverine.yaml) is a complete, commented
 example. Unknown keys are rejected, so a typo does not silently disable part
-of a rule. Every source, action and rule has an `id` and can be turned off
+of a rule. Every exclude list, source, action and rule has an `id` and can be turned off
 with `disabled: true`. Durations are written like `30s`, `5m` or `1h`.
 
 ### Configuration directory
@@ -121,12 +121,13 @@ of the file names. Prefix the names with numbers to choose the order:
 /etc/wolverine/
   wolverine.yaml          main file: state_file, include_dir, shared actions...
   rules.d/
-    10-ssh.yaml           rules, sources, actions or allowlist entries
+    10-ssh.yaml           rules, sources, actions or exclude lists
     20-web.yaml
 ```
 
-- **Merging:** the `allowlist`, `sources`, `actions` and `rules` of each
-  file are added to those already read. A rule can use an action defined in
+- **Merging:** the `exclude_lists`, `sources`, `actions` and `rules` of
+  each file are added to those already read. A rule can use an action or an
+  exclude list defined in another file, and a list can include a list of
   another file.
 - **Unique ids:** an id used twice is an error that names both files.
 - **Main file only:** `state_file` and `include_dir` can only be set in the
@@ -454,6 +455,7 @@ rules:
     count: 5
     window: 5m
     suppress: 1h
+    exclude: [trusted]
     actions: [email-admin, block-ip, slack]
 ```
 
@@ -471,6 +473,8 @@ events with the same `group_by` value occur within `window`:
 - **After an alert,** the counter of that group restarts from zero.
 - **`suppress`**: no new alert for the same group during that time (`0`:
   no suppression).
+- **`exclude`**: the ids of the [exclude lists](#exclude-lists) whose
+  events the rule ignores.
 - **`actions`**: the ids of the actions to run.
 
 The example rule only counts `Failed <method> for ...` messages, which are
@@ -539,7 +543,9 @@ wolverine refuses to start. When running as a service, put the variables in
   around them. Log contents cannot inject commands.
 - **Empty values:** if a variable used in the command is empty, the action
   fails instead of running a broken command.
-- **Allowlist:** alerts involving an allowlisted IP are skipped.
+- **Protecting addresses:** give the rules that run a blocking action an
+  `exclude` list of the addresses that must never be blocked (see
+  [Exclude lists](#exclude-lists)).
 
 #### `webhook`: HTTP POST
 
@@ -553,7 +559,6 @@ wolverine refuses to start. When running as a service, put the variables in
     timeout: 10s              # default
     retries: 2
   max_events: 20
-  use_allowlist: false        # true if this webhook blocks IPs
 ```
 
 - **Body:** the alert as JSON, by default.
@@ -586,22 +591,50 @@ For a custom body such as a Slack message, write a `body` template:
 - **Startup check:** wolverine renders the template with sample values when
   it starts and refuses an invalid JSON result.
 
-### Allowlist
+### Exclude lists
 
 ```yaml
-allowlist:
-  - 127.0.0.0/8
-  - ::1
-  - 192.168.1.0/24
+exclude_lists:
+  - id: localhost
+    description: the machine itself
+    entries: [127.0.0.0/8, '::1']
+  - id: admins
+    entries:
+      - 192.168.1.0/24
+      - 2001:db8:1::/48
+  - id: trusted
+    description: addresses never blocked
+    entries: [localhost, admins, 198.51.100.10]
+
+rules:
+  - id: ssh-failed-logins-per-ip
+    exclude: [trusted]
+    ...
+  - id: ssh-root-logins
+    exclude: [localhost]      # admins still count here
+    ...
 ```
 
-IP addresses and CIDR ranges that must never be blocked: your admin
-workstations, monitoring hosts, gateways...
+Named lists of addresses that rules ignore: your admin workstations,
+monitoring hosts, gateways...
 
-- **Actions skipped:** `ssh` actions, and `webhook` actions with
-  `use_allowlist: true`, are skipped for alerts involving these addresses.
-- **Still raised:** the alert itself, and the email and notification
-  webhooks, so you still see the problem.
+- **Entries:** IP addresses, CIDR ranges, or the id of another list, whose
+  entries are added. A list may name a list defined after it, or in another
+  file of the [configuration directory](#configuration-directory). A list
+  that includes itself, directly or not, is an error. Quote IPv6 addresses
+  inside `[...]`: `'::1'`.
+- **Per rule:** a rule's `exclude` names the lists whose events it ignores.
+  Excluded events are not counted, so they never raise an alert or run the
+  rule's actions. The other rules still see them.
+- **Pipeline:** after parsing and enrichment, a filter checks the event's
+  `SourceIP` against the lists that enabled rules use, and records the lists
+  it is in. With `-events FILE`, they appear in the event's `ExcludedBy`;
+  with `-v -v`, they are logged.
+- **Replaces `allowlist`:** earlier versions had a single `allowlist` that
+  only stopped the `ssh` actions (and webhooks with `use_allowlist`). A
+  configuration that still uses `allowlist` or `use_allowlist` is refused
+  with a message pointing here. To keep the same protection, define a list
+  and add it to the `exclude` of every rule that runs a blocking action.
 
 ### State file
 
@@ -730,8 +763,9 @@ internal/
     systemd/              "systemd-service" source (sd-journal)
   parser/                 Parser interface, event field helpers
   processor/enrichment/   sshd enrichment
+  processor/filter/       exclude lists
   detection/              rules (threshold)
-  action/                 dispatcher, allowlist, email, ssh, webhook
+  action/                 dispatcher, email, ssh, webhook
   state/                  state file (positions of the sources)
   verbose/                -v / -v -v logging
 ```

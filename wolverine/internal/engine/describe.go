@@ -77,15 +77,24 @@ func describe(cfg *config.Config) {
 		verbose.Debugf("source %s: category: %s", s.ID, or(s.Category, "system"))
 	}
 
-	verbose.Infof("processors: sshd")
+	verbose.Infof("processors: sshd, exclude")
+
+	for _, l := range cfg.ExcludeLists {
+		desc := ""
+		if l.Description != "" {
+			desc = " (" + l.Description + ")"
+		}
+		verbose.Infof("exclude list %s%s: %s", l.ID, desc, or(strings.Join(l.Entries, ", "), "empty"))
+	}
 
 	for _, r := range cfg.Rules {
 		if r.Disabled {
 			verbose.Infof("rule %s: disabled", r.ID)
 			continue
 		}
-		verbose.Infof("rule %s: %s, %d events per %s within %s (suppress: %s), actions: %s",
-			r.ID, r.Type, r.Count, r.GroupBy, r.Window, r.Suppress, or(strings.Join(r.Actions, ", "), "none"))
+		verbose.Infof("rule %s: %s, %d events per %s within %s (suppress: %s), exclude: %s, actions: %s",
+			r.ID, r.Type, r.Count, r.GroupBy, r.Window, r.Suppress,
+			or(strings.Join(r.Exclude, ", "), "none"), or(strings.Join(r.Actions, ", "), "none"))
 		verbose.Debugf("rule %s: match %+v", r.ID, r.Match)
 	}
 
@@ -97,7 +106,6 @@ func describe(cfg *config.Config) {
 		verbose.Infof("action %s: %s %s%s", a.ID, a.Type, actionTarget(a), state)
 	}
 
-	verbose.Infof("allowlist: %s", or(strings.Join(cfg.Allowlist, ", "), "empty"))
 	verbose.Infof("state file: %s", or(cfg.StateFile, "none (sources start from start_at on every run)"))
 }
 

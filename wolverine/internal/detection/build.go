@@ -39,6 +39,7 @@ func buildRule(c config.Rule) (Rule, error) {
 		Action:    c.Match.Action,
 		Status:    c.Match.Status,
 		HasFields: c.Match.HasFields,
+		Exclude:   c.Exclude,
 	}
 
 	switch c.Type {

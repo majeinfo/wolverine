@@ -36,11 +36,11 @@ func TestBuildErrors(t *testing.T) {
 	for _, tt := range tests {
 		c := emailCfg()
 		tt.mod(&c)
-		if _, err := Build([]config.Action{c}, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
+		if _, err := Build([]config.Action{c}); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: got error %v, want it to contain %q", tt.name, err, tt.want)
 		}
 	}
-	if _, err := Build([]config.Action{emailCfg(), emailCfg()}, nil); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if _, err := Build([]config.Action{emailCfg(), emailCfg()}); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Errorf("duplicate ids: got %v", err)
 	}
 }
@@ -54,7 +54,7 @@ func sshCfg() config.Action {
 }
 
 func TestBuildSSH(t *testing.T) {
-	actions, err := Build([]config.Action{sshCfg()}, nil)
+	actions, err := Build([]config.Action{sshCfg()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,15 +77,9 @@ func TestBuildSSH(t *testing.T) {
 	for _, tt := range tests {
 		c := sshCfg()
 		tt.mod(&c)
-		if _, err := Build([]config.Action{c}, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
+		if _, err := Build([]config.Action{c}); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: got error %v, want it to contain %q", tt.name, err, tt.want)
 		}
-	}
-}
-
-func TestBuildBadAllowlist(t *testing.T) {
-	if _, err := Build([]config.Action{sshCfg()}, []string{"nope"}); err == nil || !strings.Contains(err.Error(), "allowlist") {
-		t.Errorf("Build with a bad allowlist: got %v", err)
 	}
 }
 
@@ -101,13 +95,12 @@ func TestBuildWebhook(t *testing.T) {
 	c := webhookCfg()
 	c.Webhook.Headers = map[string]string{"X-Source": "wolverine"}
 	c.Webhook.HeadersEnv = map[string]string{"Authorization": "WOLVERINE_TEST_TOKEN"}
-	c.UseAllowlist = true
-	actions, err := Build([]config.Action{c}, []string{"10.0.0.0/8"})
+	actions, err := Build([]config.Action{c})
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := actions["hook"].(*webhook.Webhook)
-	if w.Headers["Authorization"] != "Bearer s3cret" || w.Headers["X-Source"] != "wolverine" || len(w.Allowlist) != 1 {
+	if w.Headers["Authorization"] != "Bearer s3cret" || w.Headers["X-Source"] != "wolverine" {
 		t.Errorf("unexpected webhook: %+v", w)
 	}
 
@@ -116,7 +109,7 @@ func TestBuildWebhook(t *testing.T) {
 	c = webhookCfg()
 	c.Webhook.URL, c.Webhook.URLEnv = "", "WOLVERINE_TEST_URL"
 	c.Webhook.Body, c.Webhook.Escape = `{"text": "{{.Message}}"}`, "slack"
-	actions, err = Build([]config.Action{c}, nil)
+	actions, err = Build([]config.Action{c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,14 +117,8 @@ func TestBuildWebhook(t *testing.T) {
 		t.Errorf("unexpected webhook: %+v", w)
 	}
 	t.Setenv("WOLVERINE_TEST_URL", "ftp://hooks.slack.com/services/T000/B000/SECRET")
-	if _, err := Build([]config.Action{c}, nil); err == nil || strings.Contains(err.Error(), "SECRET") {
+	if _, err := Build([]config.Action{c}); err == nil || strings.Contains(err.Error(), "SECRET") {
 		t.Errorf("an invalid url_env must fail without printing the URL: %v", err)
-	}
-
-	// The allowlist is opt-in for webhooks.
-	actions, _ = Build([]config.Action{webhookCfg()}, []string{"10.0.0.0/8"})
-	if w := actions["hook"].(*webhook.Webhook); len(w.Allowlist) != 0 {
-		t.Error("allowlist applied without use_allowlist")
 	}
 
 	tests := []struct {
@@ -157,7 +144,7 @@ func TestBuildWebhook(t *testing.T) {
 	for _, tt := range tests {
 		c := webhookCfg()
 		tt.mod(&c)
-		if _, err := Build([]config.Action{c}, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
+		if _, err := Build([]config.Action{c}); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: got error %v, want it to contain %q", tt.name, err, tt.want)
 		}
 	}
@@ -166,7 +153,7 @@ func TestBuildWebhook(t *testing.T) {
 func TestRoutes(t *testing.T) {
 	disabled := emailCfg()
 	disabled.ID, disabled.Disabled = "off", true
-	actions, err := Build([]config.Action{emailCfg(), disabled}, nil)
+	actions, err := Build([]config.Action{emailCfg(), disabled})
 	if err != nil {
 		t.Fatal(err)
 	}

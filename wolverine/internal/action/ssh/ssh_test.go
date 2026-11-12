@@ -2,7 +2,6 @@ package ssh
 
 import (
 	"context"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,31 +106,5 @@ func TestExecuteFailure(t *testing.T) {
 	err := s.Execute(context.Background(), alert("203.0.113.7", "root"))
 	if err == nil || !strings.Contains(err.Error(), "remote output") {
 		t.Fatalf("got %v, want an error with the command output", err)
-	}
-}
-
-func TestAllowlist(t *testing.T) {
-	bin, argsFile := fakeSSH(t, "0")
-	s := newSSH(t, "ipset add blocklist {{.SourceIP}} -exist")
-	s.Binary = bin
-	s.Allowlist = []netip.Prefix{
-		netip.MustParsePrefix("10.0.0.0/8"),
-		netip.MustParsePrefix("2001:db8::1/128"),
-	}
-
-	for _, ip := range []string{"10.1.2.3", "::ffff:10.1.2.3", "2001:db8::1"} {
-		if err := s.Execute(context.Background(), alert(ip, "root")); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(argsFile); err == nil {
-			t.Fatalf("%s is allowlisted, ssh must not run", ip)
-		}
-	}
-
-	if err := s.Execute(context.Background(), alert("203.0.113.7", "root")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(argsFile); err != nil {
-		t.Fatal("203.0.113.7 is not allowlisted, ssh must run")
 	}
 }
