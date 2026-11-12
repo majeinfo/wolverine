@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,7 +36,7 @@ type input struct {
 	parser parser.Parser
 	typ    string // source type in the configuration
 
-	lines, unparsed atomic.Int64
+	lines, unparsed, excluded atomic.Int64
 }
 
 type Engine struct {
@@ -99,14 +100,25 @@ func New(cfg *config.Config) (*Engine, error) {
 	return e, nil
 }
 
-// buildExclude resolves the exclude lists and checks those the rules name.
-// The processor only checks the lists used by the enabled rules.
+// buildExclude resolves the exclude lists and checks those the sources and
+// rules name. The processor only checks the lists of the enabled ones.
 func buildExclude(cfg *config.Config) (*filter.Exclude, error) {
 	lists, err := filter.BuildLists(cfg.ExcludeLists)
 	if err != nil {
 		return nil, err
 	}
-	x := &filter.Exclude{}
+	x := &filter.Exclude{Sources: map[string][]*filter.List{}}
+	for _, s := range cfg.Sources {
+		for _, id := range s.Exclude {
+			l, ok := lists[id]
+			if !ok {
+				return nil, fmt.Errorf("source %q: exclude: unknown exclude list %q", s.ID, id)
+			}
+			if !s.Disabled && !slices.Contains(x.Sources[s.ID], l) {
+				x.Sources[s.ID] = append(x.Sources[s.ID], l)
+			}
+		}
+	}
 	used := map[string]bool{}
 	for _, r := range cfg.Rules {
 		for _, id := range r.Exclude {
@@ -217,6 +229,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		nEvents++
 		ev := e.process(ctx, it.ev)
 		if ev == nil {
+			it.in.excluded.Add(1) // only the exclude lists drop events
 			return
 		}
 		if eventEnc != nil {
@@ -252,7 +265,11 @@ loop:
 	e.saveState()
 
 	for _, in := range e.inputs {
-		log.Printf("source %s: %d lines, %d unparsed", in.source.Name(), in.lines.Load(), in.unparsed.Load())
+		msg := fmt.Sprintf("source %s: %d lines, %d unparsed", in.source.Name(), in.lines.Load(), in.unparsed.Load())
+		if n := in.excluded.Load(); n > 0 {
+			msg += fmt.Sprintf(", %d excluded", n)
+		}
+		log.Print(msg)
 	}
 	log.Printf("%d events, %d alerts", nEvents, nAlerts)
 	return firstErr

@@ -156,6 +156,9 @@ Every source has an `id`, a `type`, `follow` and `start_at`:
 When the [state file](#state-file) knows a source, its saved position is used
 instead of `start_at`.
 
+Any source can also have an `exclude`: the [exclude lists](#exclude-lists)
+whose events are dropped from this source, before any rule sees them.
+
 #### `logfile`: log files
 
 ```yaml
@@ -609,6 +612,11 @@ exclude_lists:
     field: DestIP             # default: SourceIP
     entries: [10.0.0.0/8]
 
+sources:
+  - id: nginx
+    exclude: [localhost]      # health checks: dropped for every rule
+    ...
+
 rules:
   - id: ssh-failed-logins-per-ip
     exclude: [trusted]
@@ -618,8 +626,8 @@ rules:
     ...
 ```
 
-Named lists of addresses that rules ignore: your admin workstations,
-monitoring hosts, gateways...
+Named lists of addresses to ignore, for a whole source or for some rules:
+your admin workstations, monitoring hosts, gateways...
 
 - **Entries:** IP addresses, CIDR ranges, or the id of another list, whose
   entries are added. A list may name a list defined after it, or in another
@@ -632,13 +640,21 @@ monitoring hosts, gateways...
   `group_by`. An event whose field is empty or not an IP address is not in
   the list. The entries of an included list are checked against the field
   of the list that includes it.
+- **Per source:** a source's `exclude` names the lists whose events are
+  dropped from it. No rule sees them, and `-events` does not print them.
+  The count of dropped events is logged with the source's line count when
+  wolverine stops.
 - **Per rule:** a rule's `exclude` names the lists whose events it ignores.
   Excluded events are not counted, so they never raise an alert or run the
   rule's actions. The other rules still see them.
-- **Pipeline:** after parsing and enrichment, a filter checks the event
+- **Which to use:** per source, for traffic you never want to analyze
+  (health checks, your own scanners); per rule, when only some rules must
+  ignore it (never block the admins, but still alert on their failures).
+- **Pipeline:** after parsing and enrichment, a filter first drops the
+  events that are in a list of their source. Then it checks the others
   against the lists that enabled rules use, each on its field, and records
-  the lists it is in. With `-events FILE`, they appear in the event's `ExcludedBy`;
-  with `-v -v`, they are logged.
+  the lists they are in. With `-events FILE`, those appear in the event's
+  `ExcludedBy`. With `-v -v`, both are logged.
 - **Replaces `allowlist`:** earlier versions had a single `allowlist` that
   only stopped the `ssh` actions (and webhooks with `use_allowlist`). A
   configuration that still uses `allowlist` or `use_allowlist` is refused

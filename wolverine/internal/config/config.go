@@ -105,6 +105,9 @@ type Source struct {
 	Timezone string `yaml:"timezone"`
 	// Category set on the events (default: system).
 	Category string `yaml:"category"`
+	// Exclude lists the ids of the exclude lists whose events are dropped
+	// from this source: no rule sees them.
+	Exclude []string `yaml:"exclude"`
 }
 
 // AWS holds the credentials and region of an aws-s3 source. Without any of

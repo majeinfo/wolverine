@@ -2,10 +2,12 @@
 
 # Exclude lists: named lists of IP addresses and CIDR ranges that rules can
 # ignore. An entry may also be the id of another exclude list, whose entries
-# are added. After parsing, each event is checked against the lists used by
-# the rules; a rule ignores the events that are in one of the lists of its
-# "exclude": they are not counted, so they never raise an alert or trigger
-# its actions. Other rules still see them.
+# are added. Lists are used in the "exclude" of:
+#   - a source: its events that are in one of the lists are dropped after
+#     parsing, before any rule sees them;
+#   - a rule: the rule ignores the events that are in one of the lists: they
+#     are not counted, so they never raise an alert or trigger its actions.
+#     Other rules still see them.
 # "field" is the event field holding the address to check: SourceIP (the
 # default), DestIP, or a key of Fields from a source's regexp (same names as
 # group_by). Included lists are checked against the including list's field.
@@ -126,6 +128,7 @@ sources:
   #   regexp: '^(?P<type>\S+) (?P<timestamp>\S+) (?P<elb>\S+) (?P<source_ip>[^ :]+):\d+ \S+ \S+ \S+ \S+ (?P<status>\d{3}) .*$'
   #   timestamp_formats: [rfc3339]
   #   category: web
+  #   exclude: [localhost]          # drop these events (exclude_lists)
 
   # The journal entries of a systemd service, read through the sd-journal
   # API. The event fields come from the journal: timestamp, hostname,

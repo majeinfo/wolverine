@@ -171,6 +171,44 @@ func TestRunExcludeLists(t *testing.T) {
 	}
 }
 
+// A source's exclude lists drop its events before any rule sees them.
+func TestRunSourceExcludeLists(t *testing.T) {
+	dir := t.TempDir()
+	var log strings.Builder
+	for _, ip := range []string{"192.0.2.1", "203.0.113.7", "192.0.2.2", "203.0.113.7", "192.0.2.3", "203.0.113.7"} {
+		fmt.Fprintf(&log, "Failed password for root from %s port 22 ssh2\n", ip)
+	}
+	path := filepath.Join(dir, "secure")
+	os.WriteFile(path, []byte(log.String()), 0o644)
+
+	src := logfile(path)
+	src.Regexp = `^Failed password for \S+ from (?P<source_ip>\S+) .*$`
+	src.Exclude = []string{"scanners"}
+	cfg := &config.Config{
+		ExcludeLists: []config.ExcludeList{{ID: "scanners", Entries: []string{"192.0.2.0/24"}}},
+		Sources:      []config.Source{src},
+		Rules:        []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 1, Window: time.Hour}},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, events bytes.Buffer
+	eng.Alerts, eng.Events = &out, &events
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := out.String(); strings.Contains(s, "192.0.2.") || !strings.Contains(s, "203.0.113.7") {
+		t.Errorf("alerts:\n%s", s)
+	}
+	if s := events.String(); strings.Contains(s, "192.0.2.") || strings.Count(s, "\n") != 3 {
+		t.Errorf("events:\n%s", s)
+	}
+	if in := eng.inputs[0]; in.lines.Load() != 6 || in.excluded.Load() != 3 {
+		t.Errorf("lines=%d excluded=%d, want 6 and 3", in.lines.Load(), in.excluded.Load())
+	}
+}
+
 func TestBuildExcludeErrors(t *testing.T) {
 	cfg := &config.Config{
 		Sources:      []config.Source{logfile("/var/log/messages")},
@@ -183,6 +221,11 @@ func TestBuildExcludeErrors(t *testing.T) {
 	cfg.Rules = []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 1, Window: time.Minute, Exclude: []string{"nope"}}}
 	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), `rule "r": exclude: unknown exclude list "nope"`) {
 		t.Errorf("unknown list in a rule: got %v", err)
+	}
+	cfg.Rules = nil
+	cfg.Sources[0].Exclude = []string{"nope"}
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), `source "messages": exclude: unknown exclude list "nope"`) {
+		t.Errorf("unknown list in a source: got %v", err)
 	}
 }
 

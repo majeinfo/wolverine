@@ -2,9 +2,10 @@
 // CIDR ranges that rules ignore. A list may include other lists by name.
 //
 // Each list checks one event field (default SourceIP). The Exclude
-// processor runs after parsing and enrichment: it records in each event the
-// lists whose field holds an address of the list (Event.ExcludedBy). Each
-// rule then skips the events excluded by one of its own lists.
+// processor runs after parsing and enrichment. It drops the events that are
+// in a list of their source; it records in the others the lists of the rules
+// they are in (Event.ExcludedBy), and each rule then skips the events
+// excluded by one of its own lists.
 package filter
 
 import (
@@ -127,28 +128,41 @@ func parseAddress(s string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
-// Exclude records in each event the lists whose field holds one of their
+// Exclude drops the events that are in a list of their source, and records
+// in the others the lists of the rules whose field holds one of their
 // addresses.
 type Exclude struct {
-	// Lists are the lists to check: those the rules use.
+	// Sources maps a source id to the lists whose events are dropped.
+	Sources map[string][]*List
+	// Lists are the lists to record: those the rules use.
 	Lists []*List
 }
 
 func (*Exclude) Name() string { return "exclude" }
 
 func (x *Exclude) Process(_ context.Context, ev *event.Event) (*event.Event, error) {
-	if len(x.Lists) == 0 {
+	sourceLists := x.Sources[ev.Source]
+	if len(sourceLists) == 0 && len(x.Lists) == 0 {
 		return ev, nil
 	}
 	// Most lists check the same field: parse each field once.
 	addrs := map[string]netip.Addr{}
-	for _, l := range x.Lists {
+	in := func(l *List) (netip.Addr, bool) {
 		addr, seen := addrs[l.Field]
 		if !seen {
 			addr, _ = netip.ParseAddr(detection.FieldValue(ev, l.Field)) // invalid if not an address
 			addrs[l.Field] = addr
 		}
-		if addr.IsValid() && l.Contains(addr) {
+		return addr, addr.IsValid() && l.Contains(addr)
+	}
+	for _, l := range sourceLists {
+		if addr, ok := in(l); ok {
+			verbose.Debugf("event from %s dropped: %s %s is in exclude list %s", ev.Source, l.Field, addr, l.ID)
+			return nil, nil
+		}
+	}
+	for _, l := range x.Lists {
+		if addr, ok := in(l); ok {
 			ev.ExcludedBy = append(ev.ExcludedBy, l.ID)
 			verbose.Debugf("event from %s: %s %s is in exclude list %s", ev.Source, l.Field, addr, l.ID)
 		}

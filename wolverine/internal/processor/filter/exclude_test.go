@@ -126,3 +126,37 @@ func TestExcludeField(t *testing.T) {
 		}
 	}
 }
+
+func TestExcludeSource(t *testing.T) {
+	lists, err := BuildLists([]config.ExcludeList{
+		{ID: "scanners", Entries: []string{"192.0.2.0/24"}},
+		{ID: "lan-dest", Field: "DestIP", Entries: []string{"10.0.0.0/8"}},
+		{ID: "admins", Entries: []string{"192.0.2.1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := &Exclude{
+		Sources: map[string][]*List{"web": {lists["scanners"], lists["lan-dest"]}},
+		Lists:   []*List{lists["admins"]},
+	}
+	for _, tt := range []struct {
+		ev   event.Event
+		want string // "dropped", or the lists recorded
+	}{
+		{event.Event{Source: "web", SourceIP: "192.0.2.1"}, "dropped"},
+		{event.Event{Source: "web", SourceIP: "203.0.113.1", DestIP: "10.1.1.1"}, "dropped"},
+		{event.Event{Source: "web", SourceIP: "203.0.113.1"}, ""},
+		// The lists of a source only apply to it.
+		{event.Event{Source: "ssh", SourceIP: "192.0.2.1"}, "admins"},
+	} {
+		ev, err := x.Process(context.Background(), &tt.ev)
+		got := "dropped"
+		if ev != nil {
+			got = strings.Join(ev.ExcludedBy, ",")
+		}
+		if err != nil || got != tt.want {
+			t.Errorf("%+v: got %q (%v), want %q", tt.ev, got, err, tt.want)
+		}
+	}
+}

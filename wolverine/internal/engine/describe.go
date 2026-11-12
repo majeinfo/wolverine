@@ -75,6 +75,9 @@ func describe(cfg *config.Config) {
 				s.ID, strings.Join(formats, ", "), or(s.Timezone, "local"))
 		}
 		verbose.Debugf("source %s: category: %s", s.ID, or(s.Category, "system"))
+		if len(s.Exclude) > 0 {
+			verbose.Infof("source %s: exclude: %s", s.ID, strings.Join(s.Exclude, ", "))
+		}
 	}
 
 	verbose.Infof("processors: sshd, exclude")
