@@ -33,11 +33,18 @@ exclude_lists:
 # start_at.
 state_file: /var/lib/wolverine/state.json
 
+# How long the data memorized to evaluate the rules (the events counted by a
+# threshold rule, the suppressions) and the alerts raised are kept, at most
+# (wall clock): they are then forgotten, even if no new event comes. The
+# window and suppress of every rule must not exceed it. Default: 24h; the
+# -max-lifetime option overrides it.
+max_lifetime: 24h
+
 # Directory of additional configuration files, relative to the directory of
 # this file. Every *.yaml and *.yml file in it is read, in lexical order
 # (10-ssh.yaml before 20-web.yaml), and its exclude lists, sources, actions
 # and rules are added to those of this file. Hidden files and subdirectories are
-# ignored; state_file and include_dir can only be set here.
+# ignored; state_file, max_lifetime and include_dir can only be set here.
 # Without this setting, rules.d is used if it exists; "" disables it.
 include_dir: rules.d
 

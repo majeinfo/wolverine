@@ -45,6 +45,12 @@ type Engine struct {
 	detector   *detection.Engine
 	routes     map[string][]action.Action
 	state      *state.Store // nil: positions are not saved
+	history    history
+
+	// MaxLifetime is how long the data memorized by the rules and the
+	// alerts raised are kept (from max_lifetime, DefaultMaxLifetime if not
+	// set). Run flushes them periodically.
+	MaxLifetime time.Duration
 
 	// Alerts receives every alert as a JSON line (nil: not written).
 	Alerts io.Writer
@@ -96,6 +102,13 @@ func New(cfg *config.Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	lifetime := cfg.MaxLifetime
+	if lifetime == 0 {
+		lifetime = config.DefaultMaxLifetime
+	}
+	if err := checkLifetime(cfg.Rules, lifetime); err != nil {
+		return nil, err
+	}
 	actions, err := action.Build(cfg.Actions)
 	if err != nil {
 		return nil, err
@@ -105,11 +118,13 @@ func New(cfg *config.Config) (*Engine, error) {
 		return nil, err
 	}
 	describe(cfg)
+	verbose.Infof("maximum lifetime of the memorized data and alerts: %s", lifetime)
 	e := &Engine{
-		inputs:     inputs,
-		processors: []processor.Processor{enrichment.SSHD{}, exclude},
-		detector:   &detection.Engine{Rules: rules},
-		routes:     routes,
+		inputs:      inputs,
+		processors:  []processor.Processor{enrichment.SSHD{}, exclude},
+		detector:    &detection.Engine{Rules: rules},
+		routes:      routes,
+		MaxLifetime: lifetime,
 	}
 	if cfg.StateFile != "" {
 		if e.state, err = state.Open(cfg.StateFile); err != nil {
@@ -127,6 +142,48 @@ func New(cfg *config.Config) (*Engine, error) {
 		}
 	}
 	return e, nil
+}
+
+// checkLifetime checks that no rule needs to memorize data longer than the
+// maximum lifetime.
+func checkLifetime(rules []config.Rule, lifetime time.Duration) error {
+	if lifetime < 0 {
+		return fmt.Errorf("max_lifetime must be a positive duration (e.g. 24h)")
+	}
+	for _, r := range rules {
+		if r.Disabled {
+			continue
+		}
+		if r.Window > lifetime {
+			return fmt.Errorf("rule %q: window %s exceeds the maximum lifetime %s (max_lifetime or -max-lifetime)", r.ID, r.Window, lifetime)
+		}
+		if r.Suppress > lifetime {
+			return fmt.Errorf("rule %q: suppress %s exceeds the maximum lifetime %s (max_lifetime or -max-lifetime)", r.ID, r.Suppress, lifetime)
+		}
+	}
+	return nil
+}
+
+// expireInterval returns how often the data older than lifetime is flushed:
+// a tenth of it, between a second and a minute.
+func expireInterval(lifetime time.Duration) time.Duration {
+	return min(max(lifetime/10, time.Second), time.Minute)
+}
+
+// expire flushes the data memorized by the rules and the alerts raised
+// before cutoff.
+func (e *Engine) expire(cutoff time.Time) {
+	n := e.detector.Expire(cutoff)
+	a := e.history.expire(cutoff)
+	if n > 0 || a > 0 {
+		verbose.Debugf("expired (memorized before %s): %d rule data, %d alerts", cutoff.Format(time.DateTime), n, a)
+	}
+}
+
+// RecentAlerts returns the alerts raised within the maximum lifetime, oldest
+// first, with all their events.
+func (e *Engine) RecentAlerts() []*event.Alert {
+	return e.history.list()
 }
 
 // buildExclude resolves the exclude lists, checks those the sources and
@@ -266,6 +323,13 @@ func (e *Engine) Run(ctx context.Context) error {
 		eventEnc = json.NewEncoder(e.Events)
 	}
 
+	lifetime := e.MaxLifetime
+	if lifetime <= 0 {
+		lifetime = config.DefaultMaxLifetime
+	}
+	expireTicker := time.NewTicker(expireInterval(lifetime))
+	defer expireTicker.Stop()
+
 	var tick <-chan time.Time
 	if e.state != nil {
 		t := time.NewTicker(stateSaveInterval)
@@ -297,6 +361,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		}
 		for _, a := range e.detector.Evaluate(ev) {
 			nAlerts++
+			e.history.add(a, time.Now())
 			verbose.Infof("alert %s: %s", a.RuleID, a.Message)
 			if alertEnc != nil {
 				if err := alertEnc.Encode(e.AlertEvents.apply(a)); err != nil {
@@ -312,6 +377,8 @@ loop:
 		select {
 		case <-tick:
 			e.saveState()
+		case now := <-expireTicker.C:
+			e.expire(now.Add(-lifetime))
 		case it, ok := <-events:
 			if !ok {
 				break loop

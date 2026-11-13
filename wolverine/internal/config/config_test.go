@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // write creates the files (name -> content) under dir.
@@ -32,7 +33,7 @@ func ruleIDs(cfg *Config) string {
 func TestLoadIncludeDir(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, map[string]string{
-		"wolverine.yaml": "exclude_lists: [{id: local, entries: [127.0.0.1]}]\nstate_file: /tmp/s.json\nrules:\n  - id: main\n",
+		"wolverine.yaml": "exclude_lists: [{id: local, entries: [127.0.0.1]}]\nstate_file: /tmp/s.json\nmax_lifetime: 12h\nrules:\n  - id: main\n",
 		// Read in lexical order, whatever the extension.
 		"rules.d/20-web.yml":    "rules:\n  - id: web\n",
 		"rules.d/10-ssh.yaml":   "exclude_lists: [{id: lan, entries: [10.0.0.0/8, local]}]\nactions:\n  - id: mail\nrules:\n  - id: ssh\n",
@@ -55,7 +56,7 @@ func TestLoadIncludeDir(t *testing.T) {
 	if got := ruleIDs(cfg); got != "main,ssh,web,linked" {
 		t.Errorf("rules %s, want main,ssh,web,linked", got)
 	}
-	if len(cfg.Actions) != 1 || len(cfg.ExcludeLists) != 2 || cfg.ExcludeLists[1].ID != "lan" || cfg.StateFile != "/tmp/s.json" {
+	if len(cfg.Actions) != 1 || len(cfg.ExcludeLists) != 2 || cfg.ExcludeLists[1].ID != "lan" || cfg.StateFile != "/tmp/s.json" || cfg.MaxLifetime != 12*time.Hour {
 		t.Errorf("unexpected configuration: %+v", cfg)
 	}
 	var names []string
@@ -108,6 +109,7 @@ func TestLoadIncludeErrors(t *testing.T) {
 	}{
 		{"state_file in an included file", "", "state_file: /x\n", "only allowed in the main configuration file"},
 		{"include_dir in an included file", "", "include_dir: x\n", "only allowed in the main configuration file"},
+		{"max_lifetime in an included file", "", "max_lifetime: 1h\n", "only allowed in the main configuration file"},
 		{"unknown key", "", "rulez: []\n", "10-part.yaml"},
 		{"duplicate rule across files", "rules: [{id: r}]\n", "rules: [{id: r}]\n", `rule "r" is already defined in`},
 		{"duplicate action across files", "actions: [{id: a}]\n", "actions: [{id: a}]\n", `action "a" is already defined in`},

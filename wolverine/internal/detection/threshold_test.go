@@ -159,3 +159,51 @@ func TestExcludeIf(t *testing.T) {
 		t.Fatalf("got %d alerts, want 1", len(alerts))
 	}
 }
+
+func TestExpire(t *testing.T) {
+	// Event times far apart from the wall clock: replayed old logs.
+	t0 := time.Date(2020, 1, 1, 10, 0, 0, 0, time.UTC)
+	clock := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	r := sshFailedLoginsPerIP(3, time.Hour)
+	r.Suppress = time.Hour
+	r.Now = func() time.Time { return clock }
+
+	// Two events for .1 memorized at 10:00 and 10:05, one for .2 at 10:05.
+	r.Evaluate(failed("10.0.0.1", t0))
+	clock = clock.Add(5 * time.Minute)
+	r.Evaluate(failed("10.0.0.1", t0.Add(time.Second)))
+	r.Evaluate(failed("10.0.0.2", t0.Add(time.Second)))
+
+	// Only the first event was memorized before 10:01.
+	if n := r.Expire(clock.Add(-4 * time.Minute)); n != 1 {
+		t.Fatalf("expired %d, want 1", n)
+	}
+	if len(r.groups["10.0.0.1"]) != 1 || len(r.groups["10.0.0.2"]) != 1 {
+		t.Fatalf("groups after expiry: %v", r.groups)
+	}
+	// The expired event no longer counts: 2 more are needed.
+	if a := r.Evaluate(failed("10.0.0.1", t0.Add(2*time.Second))); a != nil {
+		t.Fatal("an expired event was counted")
+	}
+	if a := r.Evaluate(failed("10.0.0.1", t0.Add(3*time.Second))); len(a) != 1 {
+		t.Fatal("no alert")
+	}
+	if len(r.fired) != 1 {
+		t.Fatalf("suppressions: %v", r.fired)
+	}
+
+	// Everything memorized up to now expires: the group of .2 and the
+	// suppression of .1, which no longer prevents an alert.
+	clock = clock.Add(time.Minute)
+	if n := r.Expire(clock); n != 2 {
+		t.Fatalf("expired %d, want 2", n)
+	}
+	if len(r.groups) != 0 || len(r.fired) != 0 {
+		t.Fatalf("left: %v %v", r.groups, r.fired)
+	}
+	for i := range 3 {
+		if a := r.Evaluate(failed("10.0.0.1", t0.Add(time.Duration(4+i)*time.Second))); (len(a) == 1) != (i == 2) {
+			t.Fatalf("event %d: %d alerts", i, len(a))
+		}
+	}
+}

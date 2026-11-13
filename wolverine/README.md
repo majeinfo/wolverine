@@ -25,6 +25,7 @@ within 5 minutes.
   - [Exclude lists](#exclude-lists)
   - [`exclude_if` conditions](#exclude_if-conditions)
   - [State file](#state-file)
+  - [Maximum lifetime](#maximum-lifetime)
 - [Install as a service](#install-as-a-service)
 - [Project layout](#project-layout)
 
@@ -62,6 +63,7 @@ bin/wolverine -config config/wolverine.yaml
 |---|---|
 | `-config FILE` | configuration file (default `config/wolverine.yaml`) |
 | `-state FILE` | state file where the position of each source is saved; overrides `state_file` from the configuration. `-state none` disables it |
+| `-max-lifetime DURATION` | how long the data memorized by the rules and the alerts raised are kept, e.g. `12h`; overrides `max_lifetime` (default `24h`). See [maximum lifetime](#maximum-lifetime) |
 | `-events FILE` | append every event, after parsing and enrichment, as a JSON line to FILE (`-` for stdout) |
 | `-detailed-events` | include in the alerts written to stdout the events (log lines) that raised them |
 | `-minimal-events` | include in the alerts written to stdout only the last event, the one that raised them |
@@ -104,6 +106,7 @@ The configuration is a main YAML file with these sections:
 ```yaml
 exclude_lists: [...]     # named lists of IPs that rules can ignore
 state_file:    ...       # where the position of each source is saved
+max_lifetime:  24h       # how long rule data and alerts are kept in memory
 include_dir:   rules.d   # directory of additional configuration files
 sources:       [...]     # where events come from
 actions:       [...]     # what to do when an alert fires
@@ -124,7 +127,7 @@ of the file names. Prefix the names with numbers to choose the order:
 
 ```
 /etc/wolverine/
-  wolverine.yaml          main file: state_file, include_dir, shared actions...
+  wolverine.yaml          main file: state_file, max_lifetime, include_dir, shared actions...
   rules.d/
     10-ssh.yaml           rules, sources, actions or exclude lists
     20-web.yaml
@@ -135,8 +138,8 @@ of the file names. Prefix the names with numbers to choose the order:
   exclude list defined in another file, and a list can include a list of
   another file.
 - **Unique ids:** an id used twice is an error that names both files.
-- **Main file only:** `state_file` and `include_dir` can only be set in the
-  main file.
+- **Main file only:** `state_file`, `max_lifetime` and `include_dir` can
+  only be set in the main file.
 - **Location:** `include_dir` is relative to the main file's directory, or
   absolute.
   - Without `include_dir`, `rules.d` next to the main file is read if it
@@ -482,6 +485,8 @@ events with the same `group_by` value occur within `window`:
 - **After an alert,** the counter of that group restarts from zero.
 - **`suppress`**: no new alert for the same group during that time (`0`:
   no suppression).
+- **`window` and `suppress`** must not exceed the
+  [maximum lifetime](#maximum-lifetime).
 - **`exclude`**: the ids of the [exclude lists](#exclude-lists) whose
   events the rule ignores.
 - **`exclude_if`**: a [condition](#exclude_if-conditions); the rule ignores
@@ -771,6 +776,36 @@ from `start_at`.
 
 The `-state FILE` option overrides `state_file`, for example to keep a
 separate state for a test run. `-state none` disables it for one run.
+
+### Maximum lifetime
+
+```yaml
+max_lifetime: 24h
+```
+
+To evaluate the rules, wolverine keeps data in memory:
+
+- the events a threshold rule counts, per `group_by` value;
+- the suppressions: when the last alert of each group was raised;
+- the alerts raised, with their rule and events.
+
+None of this is kept longer than `max_lifetime`, measured on the clock from
+the moment it was memorized. Every tenth of the lifetime (at least every
+second, at most every minute), what is older is flushed, even if no new
+event comes. A flushed event no longer counts toward a threshold, and a
+flushed suppression no longer silences its group.
+
+- **Default:** `24h`. The `-max-lifetime` option overrides it, e.g.
+  `-max-lifetime 2h`.
+- **Rules:** the `window` and `suppress` of every enabled rule must not
+  exceed the lifetime, or wolverine refuses to start.
+- **Event time:** windows still use the event timestamps. The lifetime only
+  adds a limit on the clock: an event leaves the window when it is too old
+  for it, or when it has been memorized for `max_lifetime`, whichever comes
+  first.
+- **Not saved:** this data is lost when wolverine stops.
+
+`-v -v` logs what is flushed.
 
 ## Install as a service
 

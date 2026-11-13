@@ -530,3 +530,95 @@ func TestAlertEvents(t *testing.T) {
 		t.Errorf("alert modified: %d events", len(a.Events))
 	}
 }
+
+func TestMaxLifetime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secure")
+	// 4 failures from .1 (one alert), 2 from .2 (memorized, no alert).
+	os.WriteFile(path, []byte(strings.Repeat("Failed password for root from 192.0.2.1\n", 4)+
+		strings.Repeat("Failed password for root from 192.0.2.2\n", 2)), 0o644)
+	src := logfile(path)
+	src.Regexp = `^Failed password for (?P<username>\S+) from (?P<source_ip>\S+)$`
+	cfg := &config.Config{
+		Sources: []config.Source{src},
+		Rules:   []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour, Suppress: time.Hour}},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.MaxLifetime != config.DefaultMaxLifetime {
+		t.Errorf("lifetime %s, want the default", eng.MaxLifetime)
+	}
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The alert is memorized with all its events.
+	alerts := eng.RecentAlerts()
+	if len(alerts) != 1 || alerts[0].RuleID != "r" || len(alerts[0].Events) != 3 {
+		t.Fatalf("recent alerts: %+v", alerts)
+	}
+
+	// Nothing was memorized an hour ago.
+	eng.expire(time.Now().Add(-time.Hour))
+	if len(eng.RecentAlerts()) != 1 || eng.detector.Expire(time.Now().Add(-time.Hour)) != 0 {
+		t.Fatal("data expired too early")
+	}
+	// Everything was memorized before now + 1s: the alert, and in the rule
+	// the 4th event of .1, the 2 events of .2 and the suppression of .1.
+	eng.expire(time.Now().Add(time.Second))
+	if n := len(eng.RecentAlerts()); n != 0 {
+		t.Errorf("%d alerts left", n)
+	}
+	if n := eng.detector.Expire(time.Now().Add(time.Second)); n != 0 {
+		t.Errorf("%d rule data left", n)
+	}
+}
+
+func TestCheckLifetime(t *testing.T) {
+	rule := func(window, suppress time.Duration) config.Rule {
+		return config.Rule{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: window, Suppress: suppress}
+	}
+	for _, tt := range []struct {
+		lifetime time.Duration
+		rule     config.Rule
+		want     string
+	}{
+		{time.Hour, rule(time.Hour, time.Hour), ""},
+		{time.Hour, rule(2*time.Hour, 0), `rule "r": window 2h0m0s exceeds the maximum lifetime 1h0m0s`},
+		{time.Hour, rule(time.Minute, 2*time.Hour), `rule "r": suppress 2h0m0s exceeds the maximum lifetime 1h0m0s`},
+		{-time.Hour, rule(time.Minute, 0), "max_lifetime must be a positive duration"},
+	} {
+		err := checkLifetime([]config.Rule{tt.rule}, tt.lifetime)
+		if (err == nil) != (tt.want == "") || (err != nil && !strings.Contains(err.Error(), tt.want)) {
+			t.Errorf("%s %+v: got %v, want %q", tt.lifetime, tt.rule, err, tt.want)
+		}
+	}
+	// A disabled rule is not checked.
+	r := rule(48*time.Hour, 0)
+	r.Disabled = true
+	if err := checkLifetime([]config.Rule{r}, time.Hour); err != nil {
+		t.Error(err)
+	}
+	// New applies max_lifetime.
+	cfg := &config.Config{
+		Sources:     []config.Source{logfile("/var/log/messages")},
+		Rules:       []config.Rule{rule(2*time.Hour, 0)},
+		MaxLifetime: time.Hour,
+	}
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "exceeds the maximum lifetime") {
+		t.Errorf("New: got %v", err)
+	}
+}
+
+func TestExpireInterval(t *testing.T) {
+	for lifetime, want := range map[time.Duration]time.Duration{
+		5 * time.Second: time.Second,
+		time.Minute:     6 * time.Second,
+		24 * time.Hour:  time.Minute,
+	} {
+		if got := expireInterval(lifetime); got != want {
+			t.Errorf("%s: %s, want %s", lifetime, got, want)
+		}
+	}
+}

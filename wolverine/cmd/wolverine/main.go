@@ -12,6 +12,9 @@
 // -state FILE overrides the state_file of the configuration (where the
 // position of each source is saved); "-state none" disables it.
 //
+// -max-lifetime DURATION overrides the max_lifetime of the configuration:
+// how long the data memorized by the rules and the alerts raised are kept.
+//
 // -v describes the configuration and what wolverine is doing on stderr;
 // -v -v (or -vv) adds debugging details.
 package main
@@ -37,6 +40,7 @@ func main() {
 	statePath := flag.String("state", "", "state `file` where the position of each source is saved, overriding state_file (\"none\": do not save positions)")
 	eventsPath := flag.String("events", "", "append every parsed event as a JSON line to this `file` (\"-\": stdout)")
 	detailedEvents := flag.Bool("detailed-events", false, "include in the alerts written to stdout the events (log lines) that raised them")
+	maxLifetime := flag.Duration("max-lifetime", 0, "how long the data memorized by the rules (events counted, suppressions) and the alerts raised are kept, e.g. 12h, overriding max_lifetime (default 24h)")
 	minimalEvents := flag.Bool("minimal-events", false, "include in the alerts written to stdout the last event (log line) that raised them")
 	flag.Parse()
 
@@ -59,6 +63,12 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *maxLifetime < 0 {
+		log.Fatal("-max-lifetime must be a positive duration")
+	}
+	if *maxLifetime > 0 {
+		cfg.MaxLifetime = *maxLifetime
 	}
 	switch *statePath {
 	case "":
