@@ -1,6 +1,7 @@
 // Package state keeps, in a JSON file, the position of each source, so that
 // a restart resumes after the last record processed, and the data memorized
-// by the rules and the alerts raised within the maximum lifetime.
+// by the rules and the alerts raised within the maximum lifetime, and the
+// actions to undo.
 package state
 
 import (
@@ -29,6 +30,17 @@ type file struct {
 	// detection.Rule.Save).
 	Rules  map[string]json.RawMessage `json:"rules,omitempty"`
 	Alerts []Alert                    `json:"alerts,omitempty"`
+	Undos  []Undo                     `json:"undos,omitempty"`
+}
+
+// Undo is an action to undo (see action.Pending).
+type Undo struct {
+	Key      string       `json:"key"`
+	Action   string       `json:"action"`
+	Actions  []string     `json:"actions"`
+	Due      time.Time    `json:"due"`
+	Attempts int          `json:"attempts,omitempty"`
+	Alert    *event.Alert `json:"alert"`
 }
 
 // Alert is an alert memorized by the engine, with the wall-clock time it
@@ -53,6 +65,7 @@ type Store struct {
 	sources map[string]*Source
 	rules   map[string]json.RawMessage
 	alerts  []Alert
+	undos   []Undo
 	dirty   bool
 }
 
@@ -81,6 +94,12 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	s.alerts = f.Alerts
+	for i, u := range f.Undos {
+		if u.Alert == nil || u.Action == "" {
+			return nil, fmt.Errorf("state file %s: undo #%d: no data", path, i+1)
+		}
+	}
+	s.undos = f.Undos
 	s.rules = f.Rules
 	if s.rules == nil {
 		s.rules = map[string]json.RawMessage{}
@@ -244,13 +263,22 @@ func (s *Store) SetAlerts(alerts []Alert) {
 	s.dirty = true
 }
 
+// Undos returns the saved actions to undo.
+func (s *Store) Undos() []Undo { return s.undos }
+
+// SetUndos replaces the saved actions to undo.
+func (s *Store) SetUndos(undos []Undo) {
+	s.undos = undos
+	s.dirty = true
+}
+
 // Save writes the file if something changed. It is replaced atomically, so
 // a crash never leaves it half written. The directory is created if needed.
 func (s *Store) Save() error {
 	if !s.dirty {
 		return nil
 	}
-	b, err := json.MarshalIndent(file{Version: version, Sources: s.sources, Rules: s.rules, Alerts: s.alerts}, "", "  ")
+	b, err := json.MarshalIndent(file{Version: version, Sources: s.sources, Rules: s.rules, Alerts: s.alerts, Undos: s.undos}, "", "  ")
 	if err != nil {
 		return err
 	}

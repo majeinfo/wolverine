@@ -44,6 +44,7 @@ type Engine struct {
 	processors []processor.Processor
 	detector   *detection.Engine
 	routes     map[string][]action.Action
+	undo       *action.Scheduler
 	state      *state.Store // nil: positions are not saved
 	history    history
 
@@ -117,6 +118,10 @@ func New(cfg *config.Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	undos, err := action.BuildUndos(cfg.Actions, actions)
+	if err != nil {
+		return nil, err
+	}
 	describe(cfg)
 	verbose.Infof("maximum lifetime of the memorized data and alerts: %s", lifetime)
 	e := &Engine{
@@ -124,7 +129,11 @@ func New(cfg *config.Config) (*Engine, error) {
 		processors:  []processor.Processor{enrichment.SSHD{}, exclude},
 		detector:    &detection.Engine{Rules: rules},
 		routes:      routes,
+		undo:        action.NewScheduler(undos, actions),
 		MaxLifetime: lifetime,
+	}
+	if len(undos) > 0 && cfg.StateFile == "" {
+		log.Print("warning: without a state file, the actions not undone yet when wolverine stops are never undone")
 	}
 	if cfg.StateFile != "" {
 		if e.state, err = state.Open(cfg.StateFile); err != nil {
@@ -141,6 +150,11 @@ func New(cfg *config.Config) (*Engine, error) {
 			return nil, err
 		}
 		e.restoreRules(time.Now().Add(-lifetime))
+		var pending []action.Pending
+		for _, u := range e.state.Undos() {
+			pending = append(pending, action.Pending(u))
+		}
+		e.undo.Restore(pending)
 		if saved := e.state.Alerts(); len(saved) > 0 {
 			n := e.history.restore(saved, time.Now().Add(-lifetime))
 			verbose.Infof("state file: %d alerts restored, %d expired", n, len(saved)-n)
@@ -343,7 +357,8 @@ func (e *Engine) Run(ctx context.Context) error {
 		close(events)
 	}()
 
-	dispatcher := action.NewDispatcher(ctx, e.routes, 100)
+	e.undo.Start()
+	dispatcher := action.NewDispatcher(ctx, e.routes, 100, e.undo)
 	var alertEnc, eventEnc *json.Encoder
 	if e.Alerts != nil {
 		alertEnc = json.NewEncoder(e.Alerts)
@@ -416,7 +431,15 @@ loop:
 		}
 	}
 	dispatcher.Close()
+	e.undo.Stop()
 	e.saveState()
+	if pending, _ := e.undo.Pending(); len(pending) > 0 {
+		where := "saved in the state file"
+		if e.state == nil {
+			where = "lost: no state file"
+		}
+		log.Printf("%d actions not undone yet (%s), the first one due at %s", len(pending), where, pending[0].Due.Format(time.DateTime))
+	}
 
 	for _, in := range e.inputs {
 		msg := fmt.Sprintf("source %s: %d lines, %d unparsed", in.source.Name(), in.lines.Load(), in.unparsed.Load())
@@ -461,6 +484,13 @@ func (e *Engine) saveState() {
 	}
 	if alerts, changed := e.history.saved(); changed {
 		e.state.SetAlerts(alerts)
+	}
+	if pending, changed := e.undo.Pending(); changed {
+		undos := make([]state.Undo, len(pending))
+		for i, p := range pending {
+			undos[i] = state.Undo(p)
+		}
+		e.state.SetUndos(undos)
 	}
 	if err := e.state.Save(); err != nil {
 		log.Print(err)

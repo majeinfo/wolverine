@@ -203,6 +203,22 @@ actions:
       identity_file: /etc/wolverine/id_ed25519
       timeout: 30s
     command: sudo ipset add wolverine-blocklist {{.SourceIP}} -exist
+    # Unblock the IP an hour later, with the unblock-ip action (same
+    # alert, same variables). Blocking the same IP again postpones it.
+    # Pending undos are kept in the state file across restarts.
+    undo:
+      after: 1h
+      actions: [unblock-ip]
+
+  # The undo of block-ip. It must be enabled when block-ip is.
+  - id: unblock-ip
+    type: ssh
+    disabled: true
+    ssh:
+      host: firewall.example.com
+      user: wolverine
+      identity_file: /etc/wolverine/id_ed25519
+    command: sudo ipset del wolverine-blocklist {{.SourceIP}} -exist
 
   # POST the alert as JSON (as on stdout with -detailed-events, at most
   # max_events events) to an HTTP endpoint.

@@ -163,6 +163,19 @@ type Action struct {
 
 	// webhook
 	Webhook Webhook `yaml:"webhook"`
+
+	// Undo runs other actions some time after this one succeeded, e.g. to
+	// unblock an IP address blocked by this action.
+	Undo *Undo `yaml:"undo"`
+}
+
+// Undo tells which actions undo an action, and when.
+type Undo struct {
+	// After is how long the action lasts: the undo actions run that long
+	// after it succeeded.
+	After time.Duration `yaml:"after"`
+	// Actions are the ids of the actions run then, with the same alert.
+	Actions []string `yaml:"actions"`
 }
 
 type Webhook struct {

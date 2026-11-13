@@ -22,6 +22,7 @@ within 5 minutes.
   - [Sources](#sources)
   - [Rules](#rules)
   - [Actions](#actions)
+    - [Undoing an action](#undoing-an-action)
   - [Exclude lists](#exclude-lists)
   - [`exclude_if` conditions](#exclude_if-conditions)
   - [State file](#state-file)
@@ -569,6 +570,49 @@ wolverine refuses to start. When running as a service, put the variables in
 - **Protecting addresses:** give the rules that run a blocking action an
   `exclude` list of the addresses that must never be blocked (see
   [Exclude lists](#exclude-lists)).
+- **Temporary blocks:** see [undoing an action](#undoing-an-action).
+
+#### Undoing an action
+
+An action can last for some time only: `undo` runs other actions that long
+after it succeeded, for example to unblock an IP address an hour after
+blocking it.
+
+```yaml
+- id: block-ip
+  type: ssh
+  ssh: {host: firewall.example.com, user: wolverine}
+  command: sudo ipset add wolverine-blocklist {{.SourceIP}} -exist
+  undo:
+    after: 1h
+    actions: [unblock-ip]
+
+- id: unblock-ip
+  type: ssh
+  ssh: {host: firewall.example.com, user: wolverine}
+  command: sudo ipset del wolverine-blocklist {{.SourceIP}} -exist
+```
+
+- **Same alert:** the undo actions get the alert of the action they undo,
+  so they have the same template variables (`{{.SourceIP}}`...). Its
+  `Metadata` also has `undo_of`, the id of the action undone, for emails and
+  webhooks. Any type of action can undo another one, and several actions
+  can be listed, e.g. `[unblock-ip, email-admin]`.
+- **Only what succeeded** is undone. The undo actions do not need to be in
+  the `actions` of a rule.
+- **Repeated alerts:** when the action runs again for the same rule and
+  `group_by` value (the same IP blocked again), its undo is postponed: the
+  block lasts `after` from the last time.
+- **Failures:** an undo action that fails is tried again every minute, up to
+  5 times. The undo actions that succeeded are not run again.
+- **Restarts:** the undos not run yet are saved in the
+  [state file](#state-file). Those that came due while wolverine was stopped
+  run as soon as it starts. Without a state file they are lost, and
+  wolverine warns about it at startup.
+- **Stopping:** the undos due run before wolverine exits. With sources that
+  are read once (`follow: false`), the others wait for the next run.
+- **Checks at startup:** the undo actions must exist, be enabled when the
+  action is, differ from it, and not have an `undo` themselves.
 
 #### `webhook`: HTTP POST
 
@@ -764,6 +808,8 @@ restart resumes after the last line or entry processed:
   - Files that appeared while wolverine was stopped are read entirely:
     `start_at` only applies to the first run of a source.
 - **Journal sources** resume after the cursor of the last entry processed.
+- **Actions to undo** (see [undoing an action](#undoing-an-action)): those
+  not run yet, with their due time.
 
 The state file also holds, within the
 [maximum lifetime](#maximum-lifetime), the data of the rules (the events
@@ -916,7 +962,7 @@ internal/
   processor/enrichment/   sshd enrichment
   processor/filter/       exclude lists
   detection/              rules (threshold)
-  action/                 dispatcher, email, ssh, webhook
-  state/                  state file (positions of the sources)
+  action/                 dispatcher, undo scheduler, email, ssh, webhook
+  state/                  state file (positions, rule data, alerts, undos)
   verbose/                -v / -v -v logging
 ```

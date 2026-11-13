@@ -15,13 +15,16 @@ import (
 // detection. When the queue is full, alerts are dropped and logged.
 type Dispatcher struct {
 	routes map[string][]Action
+	undo   *Scheduler
 	queue  chan *event.Alert
 	wg     sync.WaitGroup
 }
 
 // NewDispatcher starts a dispatcher. routes maps a rule id to its actions.
-func NewDispatcher(ctx context.Context, routes map[string][]Action, queueSize int) *Dispatcher {
-	d := &Dispatcher{routes: routes, queue: make(chan *event.Alert, queueSize)}
+// The actions that succeed are given to undo, if not nil, to be undone
+// later.
+func NewDispatcher(ctx context.Context, routes map[string][]Action, queueSize int, undo *Scheduler) *Dispatcher {
+	d := &Dispatcher{routes: routes, undo: undo, queue: make(chan *event.Alert, queueSize)}
 	d.wg.Add(1)
 	go d.run(ctx)
 	return d
@@ -56,6 +59,7 @@ func (d *Dispatcher) run(ctx context.Context) {
 				continue
 			}
 			verbose.Infof("action %s: done for alert %s (%s) in %s", act.Name(), a.ID, a.RuleID, time.Since(start).Round(time.Millisecond))
+			d.undo.Schedule(act.Name(), a)
 		}
 	}
 }

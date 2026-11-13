@@ -5,17 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"wolverine/internal/config"
 	"wolverine/internal/event"
 	"wolverine/internal/source/syslog"
+	"wolverine/internal/state"
 )
 
 // The shipped configuration, with its source pointed at a test file, must
@@ -730,5 +735,89 @@ func TestRunSavesRuleData(t *testing.T) {
 	run(0)
 	if b, _ := os.ReadFile(cfg.StateFile); strings.Contains(string(b), `"r":`) {
 		t.Errorf("data of a removed rule still saved:\n%s", b)
+	}
+}
+
+func TestRunUndo(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		calls []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		defer mu.Unlock()
+		call := r.URL.Path
+		if strings.Contains(string(b), `"undo_of":"block"`) {
+			call += " (undo of block)"
+		}
+		calls = append(calls, call)
+	}))
+	defer srv.Close()
+	called := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		s := strings.Join(calls, ",")
+		calls = nil
+		return s
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secure")
+	os.WriteFile(path, []byte(strings.Repeat("Failed password for root from 192.0.2.1\n", 3)), 0o644)
+	src := logfile(path)
+	src.Regexp = `^Failed password for (?P<username>\S+) from (?P<source_ip>\S+)$`
+	cfg := &config.Config{
+		StateFile: filepath.Join(dir, "state.json"),
+		Sources:   []config.Source{src},
+		Rules:     []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour, Actions: []string{"block"}}},
+		Actions: []config.Action{
+			{ID: "block", Type: "webhook", Webhook: config.Webhook{URL: srv.URL + "/block"},
+				Undo: &config.Undo{After: time.Hour, Actions: []string{"unblock"}}},
+			{ID: "unblock", Type: "webhook", Webhook: config.Webhook{URL: srv.URL + "/unblock"}},
+		},
+	}
+	run := func() {
+		t.Helper()
+		eng, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := eng.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	savedUndos := func() []state.Undo {
+		t.Helper()
+		st, err := state.Open(cfg.StateFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Undos()
+	}
+
+	run()
+	if got := called(); got != "/block" {
+		t.Fatalf("first run: %q", got)
+	}
+	undos := savedUndos()
+	if len(undos) != 1 || undos[0].Action != "block" || time.Until(undos[0].Due) < 59*time.Minute {
+		t.Fatalf("saved undos: %+v", undos)
+	}
+
+	// Not due yet: still pending after a restart.
+	run()
+	if got := called(); got != "" || len(savedUndos()) != 1 {
+		t.Fatalf("second run: %q, %+v", got, savedUndos())
+	}
+
+	// Due while wolverine was stopped: run at the next start.
+	b, _ := os.ReadFile(cfg.StateFile)
+	past := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	b = regexp.MustCompile(`"due": "[^"]*"`).ReplaceAll(b, []byte(`"due": "`+past+`"`))
+	os.WriteFile(cfg.StateFile, b, 0o600)
+	run()
+	if got := called(); got != "/unblock (undo of block)" || len(savedUndos()) != 0 {
+		t.Fatalf("third run: %q, %+v", got, savedUndos())
 	}
 }

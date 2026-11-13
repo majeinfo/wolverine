@@ -105,7 +105,11 @@ func describe(cfg *config.Config) {
 		if a.Disabled {
 			state = " (disabled)"
 		}
-		verbose.Infof("action %s: %s %s%s", a.ID, a.Type, actionTarget(a), state)
+		undo := ""
+		if a.Undo != nil {
+			undo = fmt.Sprintf(", undone after %s by %s", a.Undo.After, strings.Join(a.Undo.Actions, ", "))
+		}
+		verbose.Infof("action %s: %s %s%s%s", a.ID, a.Type, actionTarget(a), undo, state)
 	}
 
 	verbose.Infof("state file: %s", or(cfg.StateFile, "none (sources start from start_at on every run)"))

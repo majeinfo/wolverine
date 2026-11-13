@@ -190,7 +190,7 @@ func (r *recorder) Execute(_ context.Context, a *event.Alert) error {
 
 func TestDispatcher(t *testing.T) {
 	rec := &recorder{}
-	d := NewDispatcher(context.Background(), map[string][]Action{"r1": {rec}}, 10)
+	d := NewDispatcher(context.Background(), map[string][]Action{"r1": {rec}}, 10, nil)
 	d.Dispatch(&event.Alert{ID: "a1", RuleID: "r1"})
 	d.Dispatch(&event.Alert{ID: "a2", RuleID: "other"})
 	d.Dispatch(&event.Alert{ID: "a3", RuleID: "r1"})
