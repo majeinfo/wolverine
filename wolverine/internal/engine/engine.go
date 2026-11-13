@@ -48,6 +48,9 @@ type Engine struct {
 
 	// Alerts receives every alert as a JSON line (nil: not written).
 	Alerts io.Writer
+	// AlertEvents includes in the alerts written to Alerts the events that
+	// raised them. Actions always get them.
+	AlertEvents bool
 	// Events receives every event as a JSON line, after the processors and
 	// before the detection rules (nil: not written).
 	Events io.Writer
@@ -270,7 +273,13 @@ func (e *Engine) Run(ctx context.Context) error {
 			nAlerts++
 			verbose.Infof("alert %s: %s", a.RuleID, a.Message)
 			if alertEnc != nil {
-				if err := alertEnc.Encode(a); err != nil {
+				out := a
+				if !e.AlertEvents {
+					short := *a
+					short.Events = nil // the count is in Metadata
+					out = &short
+				}
+				if err := alertEnc.Encode(out); err != nil {
 					log.Printf("writing alert: %v", err)
 				}
 			}

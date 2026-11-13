@@ -195,7 +195,8 @@ actions:
       timeout: 30s
     command: sudo ipset add wolverine-blocklist {{.SourceIP}} -exist
 
-  # POST the alert as JSON (same format as on stdout) to an HTTP endpoint.
+  # POST the alert as JSON (as on stdout with -detailed-events, at most
+  # max_events events) to an HTTP endpoint.
   # Network errors, 429 and 5xx are retried with an exponential backoff.
   - id: webhook
     type: webhook

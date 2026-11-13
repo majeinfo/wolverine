@@ -36,6 +36,7 @@ func main() {
 	flag.Var(verbose.Flag{Step: 2}, "vv", "same as -v -v")
 	statePath := flag.String("state", "", "state `file` where the position of each source is saved, overriding state_file (\"none\": do not save positions)")
 	eventsPath := flag.String("events", "", "append every parsed event as a JSON line to this `file` (\"-\": stdout)")
+	detailedEvents := flag.Bool("detailed-events", false, "include in the alerts written to stdout the events (log lines) that raised them")
 	flag.Parse()
 
 	log.SetFlags(0)
@@ -60,6 +61,7 @@ func main() {
 		log.Fatalf("%s: %v", *configPath, err)
 	}
 	eng.Alerts = os.Stdout
+	eng.AlertEvents = *detailedEvents
 	switch *eventsPath {
 	case "":
 	case "-":

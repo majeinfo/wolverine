@@ -61,6 +61,7 @@ func TestRunShippedConfig(t *testing.T) {
 	}
 	var out, events bytes.Buffer
 	eng.Alerts = &out
+	eng.AlertEvents = true // -detailed-events
 	eng.Events = &events
 	if err := eng.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -293,6 +294,10 @@ func TestRunRuleExcludeIf(t *testing.T) {
 	eng.Alerts = &out
 	if err := eng.Run(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	// Without -detailed-events, the alerts do not embed the log lines.
+	if text := out.String(); strings.Contains(text, `"Events"`) || !strings.Contains(text, `"count":3`) {
+		t.Errorf("alerts should only give the count of their events:\n%s", text)
 	}
 	var got []string
 	dec := json.NewDecoder(&out)

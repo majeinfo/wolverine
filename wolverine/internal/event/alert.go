@@ -10,6 +10,8 @@ type Alert struct {
 	Severity string
 	Message  string
 
-	Events   []*Event
+	// Events are the events that raised the alert. Left out of the JSON
+	// when empty.
+	Events   []*Event `json:",omitempty"`
 	Metadata map[string]any
 }

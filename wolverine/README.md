@@ -63,10 +63,13 @@ bin/wolverine -config config/wolverine.yaml
 | `-config FILE` | configuration file (default `config/wolverine.yaml`) |
 | `-state FILE` | state file where the position of each source is saved; overrides `state_file` from the configuration. `-state none` disables it |
 | `-events FILE` | append every event, after parsing and enrichment, as a JSON line to FILE (`-` for stdout) |
+| `-detailed-events` | include in the alerts written to stdout the events (log lines) that raised them |
 | `-v` | describe the configuration and what wolverine does (alerts, actions run, log rotations...) |
 | `-v -v` or `-vv` | debugging details: rule counters per IP, every unparsed line, each action started... |
 
-- **stdout** receives the alerts, one JSON object per line.
+- **stdout** receives the alerts, one JSON object per line. They do not
+  include the log lines that raised them unless `-detailed-events` is
+  given.
 - **stderr** receives the logs: errors, the summary at exit and the `-v`
   messages.
 
@@ -492,8 +495,13 @@ or three times.
 Alerts are written to stdout as JSON:
 
 ```json
-{"ID":"…","RuleID":"ssh-failed-logins-per-ip","Severity":"high","Message":"Repeated failed SSH logins from the same IP: 5 events for SourceIP=203.0.113.7 within 1m12s","Events":[…],"Metadata":{"value":"203.0.113.7","count":5,"group_by":"SourceIP","window":"5m0s"}}
+{"ID":"…","RuleID":"ssh-failed-logins-per-ip","Timestamp":"…","Severity":"high","Message":"Repeated failed SSH logins from the same IP: 5 events for SourceIP=203.0.113.7 within 1m12s","Metadata":{"value":"203.0.113.7","count":5,"group_by":"SourceIP","window":"5m0s"}}
 ```
+
+With `-detailed-events`, they also have an `Events` array: the events that
+raised the alert, with their log lines (`Raw`) and fields. The actions
+always get the events: emails and webhooks include up to `max_events` log
+lines.
 
 ### Actions
 
