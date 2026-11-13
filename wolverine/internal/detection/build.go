@@ -1,6 +1,9 @@
 package detection
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"wolverine/internal/config"
@@ -68,10 +71,20 @@ func buildRule(c config.Rule, excludeIf func(*event.Event) bool) (Rule, error) {
 			Count:       c.Count,
 			Window:      c.Window,
 			Suppress:    c.Suppress,
+			Signature:   Signature(c),
 		}, nil
 	case "":
 		return nil, fmt.Errorf("missing type")
 	default:
 		return nil, fmt.Errorf("unknown type %q", c.Type)
 	}
+}
+
+// Signature identifies what a rule counts: its type, match, exclusions and
+// group_by. The data a rule saved is only restored if its signature did not
+// change; count, window, suppress, actions... may change.
+func Signature(c config.Rule) string {
+	b, _ := json.Marshal([]any{c.Type, c.Match, c.Exclude, c.ExcludeIf, c.GroupBy})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }

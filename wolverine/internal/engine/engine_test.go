@@ -678,3 +678,57 @@ func TestRunSavesAlerts(t *testing.T) {
 		t.Errorf("expired alert still saved:\n%s", b)
 	}
 }
+
+func TestRunSavesRuleData(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secure")
+	line := "Failed password for root from 192.0.2.1\n"
+	os.WriteFile(path, []byte(strings.Repeat(line, 2)), 0o644)
+	src := logfile(path)
+	src.Regexp = `^Failed password for (?P<username>\S+) from (?P<source_ip>\S+)$`
+	cfg := &config.Config{
+		StateFile: filepath.Join(dir, "state.json"),
+		Sources:   []config.Source{src},
+		Rules:     []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour}},
+	}
+	run := func(appended int) int {
+		t.Helper()
+		if appended > 0 {
+			f, _ := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			f.WriteString(strings.Repeat(line, appended))
+			f.Close()
+		}
+		eng, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		eng.Alerts = &out
+		if err := eng.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(out.String(), "\n")
+	}
+	// 2 events, then a third after a restart: they add up.
+	if n := run(0); n != 0 {
+		t.Fatalf("first run: %d alerts", n)
+	}
+	if n := run(1); n != 1 {
+		t.Fatalf("after a restart: %d alerts, want 1", n)
+	}
+
+	// A rule that counts other events does not get the data.
+	cfg.Rules[0].GroupBy = "Username"
+	run(2)
+	cfg.Rules[0].GroupBy = "SourceIP"
+	if n := run(1); n != 0 {
+		t.Fatalf("data of the changed rule restored: %d alerts", n)
+	}
+
+	// A removed rule's data is forgotten.
+	cfg.Rules[0].ID = "renamed"
+	run(0)
+	if b, _ := os.ReadFile(cfg.StateFile); strings.Contains(string(b), `"r":`) {
+		t.Errorf("data of a removed rule still saved:\n%s", b)
+	}
+}

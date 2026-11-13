@@ -1,6 +1,8 @@
 package detection
 
 import (
+	"encoding/json"
+	"errors"
 	"time"
 
 	"wolverine/internal/event"
@@ -15,4 +17,16 @@ type Rule interface {
 	// data outlives the maximum lifetime, and returns how many items were
 	// forgotten.
 	Expire(cutoff time.Time) int
+	// Save returns the data memorized by the rule, to restore after a
+	// restart, and whether it changed since the previous call (or since
+	// Restore).
+	Save() (json.RawMessage, bool, error)
+	// Restore loads the data saved by Save, except what was memorized
+	// before cutoff, and returns how many items were restored. It restores
+	// nothing if the data was saved by a different rule (see Signature).
+	Restore(data json.RawMessage, cutoff time.Time) (int, error)
 }
+
+// ErrRuleChanged is returned by Restore when the data was saved by a
+// different version of the rule: it would not count the same events.
+var ErrRuleChanged = errors.New("the rule changed since the data was saved")

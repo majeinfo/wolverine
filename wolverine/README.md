@@ -765,10 +765,17 @@ restart resumes after the last line or entry processed:
     `start_at` only applies to the first run of a source.
 - **Journal sources** resume after the cursor of the last entry processed.
 
-The state file also holds the alerts raised within the
-[maximum lifetime](#maximum-lifetime), with their events, so that a restart
-gets them back. Those memorized longer ago are dropped at startup and the
-next save.
+The state file also holds, within the
+[maximum lifetime](#maximum-lifetime), the data of the rules (the events
+each threshold rule counts, its suppressions) and the alerts raised, with
+their events, so that a restart gets them back:
+
+- What was memorized longer ago is dropped at startup and the next save.
+- A rule's data is only restored if the rule still counts the same events:
+  when its `match`, `exclude`, `exclude_if` or `group_by` changed, it starts
+  from zero (`-v` says so). Changing `count`, `window`, `suppress` or
+  `actions` keeps it.
+- The data of a rule removed or disabled is dropped.
 
 When positions are saved:
 
@@ -808,10 +815,10 @@ flushed suppression no longer silences its group.
   adds a limit on the clock: an event leaves the window when it is too old
   for it, or when it has been memorized for `max_lifetime`, whichever comes
   first.
-- **Restart:** the alerts are saved in the [state file](#state-file), if
-  there is one, and restored at startup with the time they were memorized,
-  so their lifetime spans restarts. The rule data (events counted,
-  suppressions) is not saved: it is lost when wolverine stops.
+- **Restart:** all of it is saved in the [state file](#state-file), if
+  there is one, and restored at startup with the time it was memorized, so
+  its lifetime spans restarts: the events counted before a restart still
+  count toward the threshold, and a suppression still applies.
 
 `-v -v` logs what is flushed.
 

@@ -207,3 +207,68 @@ func TestExpire(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveRestore(t *testing.T) {
+	t0 := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	clock := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	newRule := func() *ThresholdRule {
+		r := sshFailedLoginsPerIP(3, time.Hour)
+		r.Suppress = time.Hour
+		r.Signature = "sig"
+		r.Now = func() time.Time { return clock }
+		return r
+	}
+	r := newRule()
+	if _, changed, _ := r.Save(); changed {
+		t.Fatal("a new rule has nothing to save")
+	}
+	// .1 raises an alert (suppression), .2 has 2 events: one memorized an
+	// hour before the other.
+	for i := range 3 {
+		r.Evaluate(failed("10.0.0.1", t0.Add(time.Duration(i)*time.Second)))
+	}
+	r.Evaluate(failed("10.0.0.2", t0))
+	clock = clock.Add(time.Hour)
+	r.Evaluate(failed("10.0.0.2", t0.Add(time.Second)))
+	data, changed, err := r.Save()
+	if err != nil || !changed {
+		t.Fatalf("save: %v %v", changed, err)
+	}
+	if _, changed, _ := r.Save(); changed {
+		t.Error("nothing changed since the last save")
+	}
+
+	// Everything restored.
+	r2 := newRule()
+	if n, err := r2.Restore(data, clock.Add(-2*time.Hour)); n != 3 || err != nil {
+		t.Fatalf("restored %d (%v), want 3", n, err)
+	}
+	if a := r2.Evaluate(failed("10.0.0.2", t0.Add(2*time.Second))); len(a) != 1 || len(a[0].Events) != 3 {
+		t.Fatal("the restored events of .2 do not count")
+	}
+	for i := range 3 {
+		if a := r2.Evaluate(failed("10.0.0.1", t0.Add(time.Duration(10+i)*time.Second))); a != nil {
+			t.Fatal("the restored suppression of .1 does not apply")
+		}
+	}
+
+	// The event of .2 and the suppression memorized at the first clock
+	// time are expired.
+	r3 := newRule()
+	if n, _ := r3.Restore(data, clock.Add(-time.Minute)); n != 1 || len(r3.groups["10.0.0.2"]) != 1 || len(r3.fired) != 0 {
+		t.Fatalf("restored %d: %v %v", n, r3.groups, r3.fired)
+	}
+	if _, changed, _ := r3.Save(); !changed {
+		t.Error("the expired data must be removed from the file")
+	}
+
+	// Another rule, or invalid data: nothing restored.
+	r4 := newRule()
+	r4.Signature = "other"
+	if n, err := r4.Restore(data, time.Time{}); n != 0 || err != ErrRuleChanged {
+		t.Errorf("other signature: %d %v", n, err)
+	}
+	if n, err := newRule().Restore([]byte("{"), time.Time{}); n != 0 || err == nil {
+		t.Errorf("invalid data: %d %v", n, err)
+	}
+}

@@ -1,6 +1,7 @@
 package detection
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sync"
@@ -29,6 +30,9 @@ type ThresholdRule struct {
 	Count       int
 	Window      time.Duration
 	Suppress    time.Duration
+	// Signature identifies what the rule counts (type, match, exclusions,
+	// group_by): data saved under another signature is not restored.
+	Signature string
 	// Now returns the wall-clock time at which data is memorized, compared
 	// with the cutoff of Expire (nil: time.Now).
 	Now func() time.Time
@@ -37,6 +41,8 @@ type ThresholdRule struct {
 	groups    map[string][]memorized
 	fired     map[string]suppression
 	lastSweep time.Time
+	// changed tells whether groups or fired changed since the last Save.
+	changed bool
 }
 
 // memorized is an event counted by a rule, with the wall-clock time it was
@@ -50,6 +56,13 @@ type memorized struct {
 // wall-clock time it was memorized.
 type suppression struct {
 	last, at time.Time
+}
+
+func (r *ThresholdRule) init() {
+	if r.groups == nil {
+		r.groups = map[string][]memorized{}
+		r.fired = map[string]suppression{}
+	}
 }
 
 func (r *ThresholdRule) now() time.Time {
@@ -73,11 +86,9 @@ func (r *ThresholdRule) Evaluate(ev *event.Event) []*event.Alert {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.groups == nil {
-		r.groups = map[string][]memorized{}
-		r.fired = map[string]suppression{}
-	}
+	r.init()
 	r.sweep(ev.Timestamp)
+	r.changed = true
 
 	now := r.now()
 	mems := append(evict(r.groups[key], ev.Timestamp.Add(-r.Window)), memorized{ev, now})
@@ -153,9 +164,95 @@ func (r *ThresholdRule) Expire(cutoff time.Time) int {
 		}
 	}
 	if n > 0 {
+		r.changed = true
 		verbose.Debugf("rule %s: %d events and suppressions expired", r.RuleID, n)
 	}
 	return n
+}
+
+// thresholdData is the data of a ThresholdRule, as saved.
+type thresholdData struct {
+	Signature    string                      `json:"signature"`
+	Groups       map[string][]savedEvent     `json:"groups,omitempty"`
+	Suppressions map[string]savedSuppression `json:"suppressions,omitempty"`
+}
+
+type savedEvent struct {
+	MemorizedAt time.Time    `json:"memorized_at"`
+	Event       *event.Event `json:"event"`
+}
+
+type savedSuppression struct {
+	// Last is the event time of the last alert of the group.
+	Last        time.Time `json:"last"`
+	MemorizedAt time.Time `json:"memorized_at"`
+}
+
+func (r *ThresholdRule) Save() (json.RawMessage, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.changed {
+		return nil, false, nil
+	}
+	d := thresholdData{Signature: r.Signature}
+	if len(r.groups) > 0 {
+		d.Groups = map[string][]savedEvent{}
+		for k, mems := range r.groups {
+			for _, m := range mems {
+				d.Groups[k] = append(d.Groups[k], savedEvent{m.at, m.ev})
+			}
+		}
+	}
+	if len(r.fired) > 0 {
+		d.Suppressions = map[string]savedSuppression{}
+		for k, s := range r.fired {
+			d.Suppressions[k] = savedSuppression{s.last, s.at}
+		}
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		return nil, false, err
+	}
+	r.changed = false
+	return b, true, nil
+}
+
+func (r *ThresholdRule) Restore(data json.RawMessage, cutoff time.Time) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var d thresholdData
+	if err := json.Unmarshal(data, &d); err != nil {
+		r.changed = true // the file must drop the invalid data
+		return 0, err
+	}
+	if d.Signature != r.Signature {
+		r.changed = true // the file must drop the old data
+		return 0, ErrRuleChanged
+	}
+	r.init()
+	n, total := 0, 0
+	for k, saved := range d.Groups {
+		total += len(saved)
+		var mems []memorized
+		for _, s := range saved {
+			if s.Event != nil && !s.MemorizedAt.Before(cutoff) {
+				mems = append(mems, memorized{s.Event, s.MemorizedAt})
+			}
+		}
+		if len(mems) > 0 {
+			r.groups[k] = mems
+			n += len(mems)
+		}
+	}
+	for k, s := range d.Suppressions {
+		total++
+		if !s.MemorizedAt.Before(cutoff) {
+			r.fired[k] = suppression{last: s.Last, at: s.MemorizedAt}
+			n++
+		}
+	}
+	r.changed = n != total
+	return n, nil
 }
 
 // sweep forgets the groups that have no event left in the window and the

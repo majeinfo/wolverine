@@ -29,7 +29,8 @@ exclude_lists:
 # Where the position of every source (offset in a log file, cursor in the
 # journal) is saved, so that a restart resumes after the last line or entry
 # processed. start_at then only applies to a source the file does not know
-# yet. It also keeps the alerts raised within max_lifetime across restarts.
+# yet. It also keeps the rule data (events counted, suppressions) and the
+# alerts raised within max_lifetime across restarts.
 # The directory is created if needed. Remove it to always start from
 # start_at.
 state_file: /var/lib/wolverine/state.json

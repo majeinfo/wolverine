@@ -1,6 +1,6 @@
 // Package state keeps, in a JSON file, the position of each source, so that
-// a restart resumes after the last record processed, and the alerts raised
-// within the maximum lifetime.
+// a restart resumes after the last record processed, and the data memorized
+// by the rules and the alerts raised within the maximum lifetime.
 package state
 
 import (
@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"wolverine/internal/event"
@@ -24,7 +25,10 @@ const version = 2
 type file struct {
 	Version int                `json:"version"`
 	Sources map[string]*Source `json:"sources"`
-	Alerts  []Alert            `json:"alerts,omitempty"`
+	// Rules is the data each rule memorized, by rule id (see
+	// detection.Rule.Save).
+	Rules  map[string]json.RawMessage `json:"rules,omitempty"`
+	Alerts []Alert                    `json:"alerts,omitempty"`
 }
 
 // Alert is an alert memorized by the engine, with the wall-clock time it
@@ -47,6 +51,7 @@ type Source struct {
 type Store struct {
 	path    string
 	sources map[string]*Source
+	rules   map[string]json.RawMessage
 	alerts  []Alert
 	dirty   bool
 }
@@ -55,7 +60,7 @@ type Store struct {
 // unreadable or invalid one is an error, rather than silently reading every
 // source again from the start.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, sources: map[string]*Source{}}
+	s := &Store{path: path, sources: map[string]*Source{}, rules: map[string]json.RawMessage{}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return s, nil
@@ -76,6 +81,10 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	s.alerts = f.Alerts
+	s.rules = f.Rules
+	if s.rules == nil {
+		s.rules = map[string]json.RawMessage{}
+	}
 	for id, src := range f.Sources {
 		if src == nil {
 			return nil, fmt.Errorf("state file %s: source %q: no data", path, id)
@@ -206,6 +215,26 @@ func (s *Store) Retain(ids []string) {
 	}
 }
 
+// Rule returns the saved data of a rule, or nil.
+func (s *Store) Rule(id string) json.RawMessage { return s.rules[id] }
+
+// SetRule replaces the saved data of a rule.
+func (s *Store) SetRule(id string, data json.RawMessage) {
+	s.rules[id] = data
+	s.dirty = true
+}
+
+// RetainRules forgets the data of the rules whose id is not in ids (removed
+// from the configuration or disabled).
+func (s *Store) RetainRules(ids []string) {
+	for id := range s.rules {
+		if !slices.Contains(ids, id) {
+			delete(s.rules, id)
+			s.dirty = true
+		}
+	}
+}
+
 // Alerts returns the saved alerts.
 func (s *Store) Alerts() []Alert { return s.alerts }
 
@@ -221,7 +250,7 @@ func (s *Store) Save() error {
 	if !s.dirty {
 		return nil
 	}
-	b, err := json.MarshalIndent(file{Version: version, Sources: s.sources, Alerts: s.alerts}, "", "  ")
+	b, err := json.MarshalIndent(file{Version: version, Sources: s.sources, Rules: s.rules, Alerts: s.alerts}, "", "  ")
 	if err != nil {
 		return err
 	}

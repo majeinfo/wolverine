@@ -140,6 +140,7 @@ func New(cfg *config.Config) (*Engine, error) {
 		if err := e.resume(); err != nil {
 			return nil, err
 		}
+		e.restoreRules(time.Now().Add(-lifetime))
 		if saved := e.state.Alerts(); len(saved) > 0 {
 			n := e.history.restore(saved, time.Now().Add(-lifetime))
 			verbose.Infof("state file: %d alerts restored, %d expired", n, len(saved)-n)
@@ -252,6 +253,30 @@ func buildExclude(cfg *config.Config) (*filter.Exclude, map[string]func(*event.E
 		}
 	}
 	return x, ruleConditions, nil
+}
+
+// restoreRules gives each rule the data it saved, except what was memorized
+// before cutoff, and forgets the data of the rules that are gone.
+func (e *Engine) restoreRules(cutoff time.Time) {
+	var ids []string
+	for _, r := range e.detector.Rules {
+		ids = append(ids, r.ID())
+		data := e.state.Rule(r.ID())
+		if data == nil {
+			continue
+		}
+		n, err := r.Restore(data, cutoff)
+		switch {
+		case errors.Is(err, detection.ErrRuleChanged):
+			verbose.Infof("rule %s: saved data ignored: the rule changed (match, exclude, exclude_if or group_by)", r.ID())
+		case err != nil:
+			// Better start without the data than not start.
+			log.Printf("state file %s: rule %s: %v (data ignored)", e.state.Path(), r.ID(), err)
+		default:
+			verbose.Infof("rule %s: %d events and suppressions restored", r.ID(), n)
+		}
+	}
+	e.state.RetainRules(ids)
 }
 
 // resume gives each source its saved positions.
@@ -425,6 +450,14 @@ func (e *Engine) setPosition(it item) {
 func (e *Engine) saveState() {
 	if e.state == nil {
 		return
+	}
+	for _, r := range e.detector.Rules {
+		data, changed, err := r.Save()
+		if err != nil {
+			log.Printf("rule %s: saving its data: %v", r.ID(), err)
+		} else if changed {
+			e.state.SetRule(r.ID(), data)
+		}
 	}
 	if alerts, changed := e.history.saved(); changed {
 		e.state.SetAlerts(alerts)
