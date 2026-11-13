@@ -10,25 +10,57 @@ import (
 )
 
 // history memorizes the alerts raised (with the rule that raised them and
-// their events) until they expire, at the maximum lifetime.
+// their events), and what their actions did, until they expire, at the
+// maximum lifetime.
 type history struct {
 	mu     sync.Mutex
-	alerts []remembered // in the order they were raised
+	alerts []*remembered // in the order they were raised
+	byID   map[string]*remembered
 	// changed tells whether alerts changed since the last call to
 	// saved.
 	changed bool
 }
 
 type remembered struct {
-	alert *event.Alert
-	at    time.Time // wall clock
+	alert   *event.Alert
+	at      time.Time // wall clock
+	actions []event.ActionRun
+}
+
+// AlertRecord is an alert memorized and its action log.
+type AlertRecord struct {
+	Alert *event.Alert
+	// Actions are what happened to its actions, in that order.
+	Actions []event.ActionRun
 }
 
 func (h *history) add(a *event.Alert, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.alerts = append(h.alerts, remembered{a, at})
+	h.insert(&remembered{alert: a, at: at})
 	h.changed = true
+}
+
+func (h *history) insert(r *remembered) {
+	if h.byID == nil {
+		h.byID = map[string]*remembered{}
+	}
+	h.alerts = append(h.alerts, r)
+	h.byID[r.alert.ID] = r
+}
+
+// record adds a run to the action log of an alert, and returns the alert,
+// or nil if it is not memorized (anymore).
+func (h *history) record(alertID string, run event.ActionRun) *event.Alert {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r := h.byID[alertID]
+	if r == nil {
+		return nil
+	}
+	r.actions = append(r.actions, run)
+	h.changed = true
+	return r.alert
 }
 
 // restore adds the alerts saved in the state file that were memorized at
@@ -38,12 +70,12 @@ func (h *history) restore(saved []state.Alert, cutoff time.Time) int {
 	defer h.mu.Unlock()
 	n := 0
 	for _, s := range saved {
-		if !s.MemorizedAt.Before(cutoff) {
-			h.alerts = append(h.alerts, remembered{s.Alert, s.MemorizedAt})
+		if s.Alert != nil && !s.MemorizedAt.Before(cutoff) {
+			h.insert(&remembered{alert: s.Alert, at: s.MemorizedAt, actions: s.Actions})
 			n++
 		}
 	}
-	slices.SortStableFunc(h.alerts, func(a, b remembered) int { return a.at.Compare(b.at) })
+	slices.SortStableFunc(h.alerts, func(a, b *remembered) int { return a.at.Compare(b.at) })
 	h.changed = n != len(saved)
 	return n
 }
@@ -59,7 +91,7 @@ func (h *history) saved() ([]state.Alert, bool) {
 	h.changed = false
 	alerts := make([]state.Alert, len(h.alerts))
 	for i, r := range h.alerts {
-		alerts[i] = state.Alert{MemorizedAt: r.at, Alert: r.alert}
+		alerts[i] = state.Alert{MemorizedAt: r.at, Alert: r.alert, Actions: slices.Clone(r.actions)}
 	}
 	return alerts, true
 }
@@ -73,6 +105,9 @@ func (h *history) expire(cutoff time.Time) int {
 		i++
 	}
 	if i > 0 {
+		for _, r := range h.alerts[:i] {
+			delete(h.byID, r.alert.ID)
+		}
 		h.alerts = slices.Clone(h.alerts[i:]) // release the old array
 		h.changed = true
 	}
@@ -88,4 +123,16 @@ func (h *history) list() []*event.Alert {
 		alerts[i] = r.alert
 	}
 	return alerts
+}
+
+// records returns the alerts memorized with their action logs, oldest
+// first.
+func (h *history) records() []AlertRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	records := make([]AlertRecord, len(h.alerts))
+	for i, r := range h.alerts {
+		records[i] = AlertRecord{Alert: r.alert, Actions: slices.Clone(r.actions)}
+	}
+	return records
 }

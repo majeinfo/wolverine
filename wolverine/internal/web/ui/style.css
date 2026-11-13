@@ -185,6 +185,26 @@ table.data tr:last-child td { border-bottom: none; }
 .feed tr.details td { background: var(--wash); }
 .feed pre { margin: 0; white-space: pre-wrap; word-break: break-all; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-secondary); }
 
+.feed td.actions { min-width: 160px; }
+.action-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-size: 12px; }
+.action-item + .action-item { margin-top: 2px; }
+.action-name { color: var(--text-primary); }
+.feed td.new { animation: flash 2.5s ease-out; }
+.status { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; color: var(--text-secondary); }
+.status-icon { font-size: 11px; width: 1em; text-align: center; }
+.status[data-level="good"] .status-icon { color: var(--good); }
+.status[data-level="critical"] .status-icon { color: var(--critical); }
+.status[data-level="pending"] .status-icon { color: var(--accent); }
+.status[data-level="info"] .status-icon { color: var(--text-muted); }
+.action-log { margin-top: 10px; }
+.action-log h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.action-log p { margin: 0; font-size: 12px; }
+.muted { color: var(--text-muted); }
+table.data.log { font-size: 12px; background: var(--surface); border-radius: 6px; }
+table.data.log td, table.data.log th { padding: 4px 8px; }
+table.data.log td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+table.data.log td.detail { color: var(--text-secondary); min-width: 200px; }
+table.data.log .error { color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; margin-top: 2px; }
 .severity { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .severity-icon { font-size: 10px; }
 .severity[data-level="critical"] .severity-icon { color: var(--critical); }

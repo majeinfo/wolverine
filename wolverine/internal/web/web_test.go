@@ -21,25 +21,25 @@ var t0 = time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
 
 type fakeBackend struct {
 	st     *stats.Store
-	alerts []*event.Alert
+	alerts []engine.AlertRecord
 	mu     sync.Mutex
-	subs   []chan *event.Alert
+	subs   []chan engine.Notice
 }
 
 func (f *fakeBackend) Info() engine.Info {
 	return engine.Info{Sources: []engine.SourceInfo{{ID: "ssh", Type: "logfile"}}, Rules: []engine.RuleInfo{{ID: "brute"}}}
 }
-func (f *fakeBackend) Stats() *stats.Store          { return f.st }
-func (f *fakeBackend) RecentAlerts() []*event.Alert { return f.alerts }
-func (f *fakeBackend) Watch() (<-chan *event.Alert, func()) {
+func (f *fakeBackend) Stats() *stats.Store                { return f.st }
+func (f *fakeBackend) AlertRecords() []engine.AlertRecord { return f.alerts }
+func (f *fakeBackend) Watch() (<-chan engine.Notice, func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	ch := make(chan *event.Alert, 10)
+	ch := make(chan engine.Notice, 10)
 	f.subs = append(f.subs, ch)
 	return ch, func() {}
 }
 
-func (f *fakeBackend) publish(a *event.Alert) {
+func (f *fakeBackend) publish(a engine.Notice) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, ch := range f.subs {
@@ -67,9 +67,13 @@ func newTest(t *testing.T, token string) (*fakeBackend, *httptest.Server) {
 	clock = t0.Add(20 * time.Minute)
 	st.Line("ssh", true, false)
 	st.Matched([]string{"brute"}, []string{"brute"})
-	b := &fakeBackend{st: st, alerts: []*event.Alert{
-		{ID: "a1", RuleID: "brute", Severity: "high", Timestamp: t0, Events: []*event.Event{{Raw: "one"}, {Raw: "two"}}},
-		{ID: "a2", RuleID: "other", Severity: "low", Timestamp: t0.Add(20 * time.Minute), Events: []*event.Event{{Raw: "three"}}},
+	b := &fakeBackend{st: st, alerts: []engine.AlertRecord{
+		{Alert: &event.Alert{ID: "a1", RuleID: "brute", Severity: "high", Timestamp: t0, Events: []*event.Event{{Raw: "one"}, {Raw: "two"}}},
+			Actions: []event.ActionRun{
+				{Time: t0, Action: "block-ip", Status: event.ActionOK},
+				{Time: t0, Action: "unblock-ip", UndoOf: "block-ip", Status: event.ActionPlanned, Due: t0.Add(time.Hour)},
+			}},
+		{Alert: &event.Alert{ID: "a2", RuleID: "other", Severity: "low", Timestamp: t0.Add(20 * time.Minute), Events: []*event.Event{{Raw: "three"}}}},
 	}}
 	t.Setenv("TEST_TOKEN", token)
 	cfg := config.HTTP{}
@@ -260,6 +264,33 @@ func TestAlerts(t *testing.T) {
 			t.Errorf("%s: %d", q, resp.StatusCode)
 		}
 	}
+
+	// The action log, always an array.
+	var raw struct{ Alerts []map[string]any }
+	get(t, srv.URL+"/api/v1/alerts", "", &raw)
+	if got := raw.Alerts; len(got) != 2 || got[0]["Actions"] == nil || len(got[0]["Actions"].([]any)) != 0 {
+		t.Fatalf("a2 actions: %v", got)
+	}
+	if acts := raw.Alerts[1]["Actions"].([]any); len(acts) != 2 ||
+		acts[1].(map[string]any)["UndoOf"] != "block-ip" || acts[1].(map[string]any)["Due"] != "2026-11-13T11:00:00Z" {
+		t.Errorf("a1 actions: %v", acts)
+	}
+	if _, ok := raw.Alerts[1]["Actions"].([]any)[0].(map[string]any)["Due"]; ok {
+		t.Error("Due given for an action that is not planned")
+	}
+
+	// One alert, with all its events by default.
+	var one alertView
+	if resp := get(t, srv.URL+"/api/v1/alerts/a1", "", &one); resp.StatusCode != 200 || one.ID != "a1" || len(one.Events) != 2 || len(one.Actions) != 2 {
+		t.Errorf("alert a1: %d %+v", resp.StatusCode, one)
+	}
+	one = alertView{}
+	if resp := get(t, srv.URL+"/api/v1/alerts/a1?events=none", "", &one); resp.StatusCode != 200 || len(one.Events) != 0 {
+		t.Errorf("alert a1, events=none: %d %+v", resp.StatusCode, one)
+	}
+	if resp := get(t, srv.URL+"/api/v1/alerts/nope", "", nil); resp.StatusCode != 404 {
+		t.Errorf("unknown alert: %d", resp.StatusCode)
+	}
 }
 
 func TestWatch(t *testing.T) {
@@ -297,13 +328,26 @@ func TestWatch(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	// Filtered out (rule), then sent without its events.
-	b.publish(&event.Alert{ID: "x1", RuleID: "other"})
-	b.publish(&event.Alert{ID: "x2", RuleID: "brute", Events: []*event.Event{{Raw: "secret line"}}})
-	var got string
-	for got = readBlock(); strings.HasPrefix(got, ": heartbeat"); got = readBlock() {
+	x1 := &event.Alert{ID: "x1", RuleID: "other"}
+	x2 := &event.Alert{ID: "x2", RuleID: "brute", Events: []*event.Event{{Raw: "secret line"}}}
+	b.publish(engine.Notice{Alert: x1})
+	b.publish(engine.Notice{Alert: x2})
+	b.publish(engine.Notice{Alert: x1, Action: &event.ActionRun{Action: "mail", Status: event.ActionOK}})
+	b.publish(engine.Notice{Alert: x2, Action: &event.ActionRun{Action: "block-ip", Status: event.ActionFailed, Error: "boom"}})
+	next := func() string {
+		got := readBlock()
+		for strings.HasPrefix(got, ": heartbeat") {
+			got = readBlock()
+		}
+		return got
 	}
-	if !strings.HasPrefix(got, "event: alert\nid: x2\ndata: {") || strings.Contains(got, "secret line") {
+	if got := next(); !strings.HasPrefix(got, "event: alert\nid: x2\ndata: {") || strings.Contains(got, "secret line") || !strings.Contains(got, `"Actions":[]`) {
 		t.Errorf("alert block: %q", got)
+	}
+	if got := next(); got != `event: action
+data: {"AlertID":"x2","RuleID":"brute","Time":"0001-01-01T00:00:00Z","Action":"block-ip","Status":"failed","Error":"boom"}
+` {
+		t.Errorf("action block: %q", got)
 	}
 	// Heartbeats keep an idle stream alive.
 	if got := readBlock(); got != ": heartbeat\n" {

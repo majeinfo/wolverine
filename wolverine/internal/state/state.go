@@ -48,6 +48,8 @@ type Undo struct {
 type Alert struct {
 	MemorizedAt time.Time    `json:"memorized_at"`
 	Alert       *event.Alert `json:"alert"`
+	// Actions is the action log of the alert.
+	Actions []event.ActionRun `json:"actions,omitempty"`
 }
 
 // Source is the saved positions of one source, by key.

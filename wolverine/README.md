@@ -1017,8 +1017,9 @@ Every endpoint is a `GET` and returns JSON. Times are given as RFC 3339
 | `/api/v1/stats` | totals since the start |
 | `/api/v1/stats?from=-1h&to=now` | totals of an interval (`to` defaults to now) |
 | `/api/v1/stats/series?from=-6h&step=5m` | counters by time bucket |
-| `/api/v1/alerts?from=-1h&rule=ssh-failed-logins-per-ip&limit=50` | alerts, newest first |
-| `/api/v1/alerts/watch` | new alerts, in real time (server-sent events) |
+| `/api/v1/alerts?from=-1h&rule=ssh-failed-logins-per-ip&limit=50` | alerts, newest first, with their action logs |
+| `/api/v1/alerts/ID` | one alert, with all its events and its action log |
+| `/api/v1/alerts/watch` | new alerts and what their actions do, in real time (server-sent events) |
 | `/healthz` | `ok` (no token needed) |
 
 **`/stats`** gives `totals`, `sources` (by id) and `rules` (by id).
@@ -1054,7 +1055,42 @@ and the same `totals`, `sources` and `rules`.
 | `limit` | at most that many alerts (default 100, at most 10000); `total` counts them all |
 | `events` | `last` (default): the last event of each alert; `all`; `none` |
 
-**`/alerts/watch`** streams the alerts as they are raised, as
+Each alert has its **action log**, `Actions`: what happened to its actions,
+in order, undo actions included. An entry has:
+
+- `Time`, `Action` (the action id) and `Status`;
+- `UndoOf`: for an undo action, the action it undoes;
+- `Due`: when a planned undo runs, or when a failed one is tried again;
+- `Duration`, in nanoseconds, of an action that ran;
+- `Error` and `Detail`, if any.
+
+| Status | Meaning |
+|---|---|
+| `ok` | the action ran and succeeded |
+| `failed` | the action ran and failed (see `Error`); a failed undo action has the `Due` time of its next try, if any |
+| `dropped` | not run: the queue of the actions was full |
+| `planned` | the undo action runs at `Due` |
+| `postponed` | the same thing was done again for a later alert: the undo runs after that one instead, at `Due` (see `Detail`) |
+| `skipped` | the undo action will not run, as it is no longer configured |
+
+```json
+"Actions": [
+  {"Time": "…T10:00:05Z", "Action": "waf-block", "Status": "ok", "Duration": 5000000},
+  {"Time": "…T10:00:05Z", "Action": "waf-unblock", "UndoOf": "waf-block", "Status": "planned", "Due": "…T11:00:05Z"},
+  {"Time": "…T10:00:05Z", "Action": "notify", "Status": "failed", "Error": "POST …: connection refused"},
+  {"Time": "…T11:00:05Z", "Action": "waf-unblock", "UndoOf": "waf-block", "Status": "ok", "Duration": 4000000}
+]
+```
+
+The action logs are kept with the alerts, within `max_lifetime`, and in the
+state file. The undo of an alert that is no longer kept still runs, but is
+not logged.
+
+**`/alerts/ID`** gives one alert, with all its events (`events` as above
+changes this), or a 404 if it is not kept (anymore).
+
+**`/alerts/watch`** streams the alerts as they are raised, and the entries
+added to their action logs, as
 [server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html).
 It takes the `rule`, `severity` and `events` parameters of `/alerts`.
 
@@ -1065,8 +1101,15 @@ retry: 3000
 
 event: alert
 id: 5b4c5279956def3f29b4c65a1c45e559
-data: {"ID":"5b4c…","RuleID":"ssh-failed-logins-per-ip","Severity":"high","Message":"…","Metadata":{…}}
+data: {"ID":"5b4c…","RuleID":"ssh-failed-logins-per-ip","Severity":"high","Message":"…","Metadata":{…},"Actions":[]}
+
+event: action
+data: {"AlertID":"5b4c…","RuleID":"ssh-failed-logins-per-ip","Time":"…","Action":"block-ip","Status":"ok","Duration":120000000}
 ```
+
+- **Alerts and actions:** an `alert` event comes before the `action` events
+  of that alert. An `action` event is an entry of the action log, with the
+  `AlertID` and `RuleID` of its alert.
 
 - **Heartbeat:** a `: heartbeat` comment comes every 15 seconds, so proxies
   keep the connection open.
@@ -1084,8 +1127,9 @@ hours), refreshed every 10 s to 1 min:
   and lines by source. Hover a chart, or focus it and use the arrow keys,
   for the values.
 - **Tables:** the counters of each source and rule.
-- **Alerts:** the alerts of the range, then the new ones as they are raised.
-  Select one for its last log line.
+- **Alerts:** the alerts of the range, then the new ones as they are raised,
+  with the latest status of each of their actions (undo actions included),
+  updated live. Select one for its last log line and its action log.
 
 It follows the system's light or dark mode; the Theme button switches it.
 The dashboard is built into the binary and loads nothing from the Internet.

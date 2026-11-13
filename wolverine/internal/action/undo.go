@@ -99,6 +99,9 @@ type Scheduler struct {
 	actions map[string]Action
 	// Now gives the current time (nil: time.Now).
 	Now func() time.Time
+	// Report, if not nil, is told what happens to the undo actions: set
+	// it before Restore and Start.
+	Report event.Reporter
 
 	mu      sync.Mutex
 	pending map[string]*Pending
@@ -148,16 +151,34 @@ func (s *Scheduler) Schedule(actionID string, a *event.Alert) {
 		Alert:   a,
 	}
 	s.mu.Lock()
-	_, postponed := s.pending[p.Key]
+	old, postponed := s.pending[p.Key]
 	s.pending[p.Key] = p
 	s.changed = true
 	s.mu.Unlock()
 	what := "planned"
 	if postponed {
 		what = "postponed"
+		for _, id := range old.Actions {
+			s.report(old.Alert, event.ActionRun{Action: id, UndoOf: actionID, Status: event.ActionPostponed, Due: p.Due,
+				Detail: fmt.Sprintf("%s done again for alert %s: undone after it instead", actionID, a.ID)})
+		}
+	}
+	for _, id := range p.Actions {
+		s.report(a, event.ActionRun{Action: id, UndoOf: actionID, Status: event.ActionPlanned, Due: p.Due})
 	}
 	verbose.Infof("action %s: undo (%s) %s at %s for alert %s (%s)", actionID, strings.Join(u.Actions, ", "), what, p.Due.Format(time.DateTime), a.ID, a.RuleID)
 	s.signal()
+}
+
+// report tells s.Report what happened to an undo action of alert a.
+func (s *Scheduler) report(a *event.Alert, run event.ActionRun) {
+	if s.Report == nil || a == nil {
+		return
+	}
+	if run.Time.IsZero() {
+		run.Time = s.now()
+	}
+	s.Report(a.ID, run)
 }
 
 func (s *Scheduler) signal() {
@@ -177,6 +198,10 @@ func (s *Scheduler) Restore(pending []Pending) {
 		if p.Alert == nil || !s.Undoes(p.Action) {
 			log.Printf("action %s: no undo anymore, pending undo for alert %s dropped", p.Action, alertID(p.Alert))
 			s.changed = true
+			for _, id := range p.Actions {
+				s.report(p.Alert, event.ActionRun{Action: id, UndoOf: p.Action, Status: event.ActionSkipped,
+					Detail: fmt.Sprintf("action %s has no undo anymore", p.Action)})
+			}
 			continue
 		}
 		var ids []string
@@ -184,6 +209,8 @@ func (s *Scheduler) Restore(pending []Pending) {
 			if s.actions[id] == nil {
 				log.Printf("action %s: undo action %s is gone or disabled, not run for alert %s", p.Action, id, p.Alert.ID)
 				s.changed = true
+				s.report(p.Alert, event.ActionRun{Action: id, UndoOf: p.Action, Status: event.ActionSkipped,
+					Detail: "the undo action is gone or disabled"})
 				continue
 			}
 			ids = append(ids, id)
@@ -285,9 +312,11 @@ func (s *Scheduler) runDue() {
 	sort.Slice(due, func(i, j int) bool { return due[i].Due.Before(due[j].Due) })
 
 	for _, p := range due {
-		failed := s.undo(p)
+		failed, errs := s.undo(p)
 
 		s.mu.Lock()
+		var retry time.Time
+		var detail string
 		// Unless a new alert postponed it meanwhile.
 		if s.pending[p.Key] == p {
 			s.changed = true
@@ -298,18 +327,28 @@ func (s *Scheduler) runDue() {
 			case p.Attempts >= maxUndoAttempts:
 				log.Printf("action %s: undo (%s) for alert %s failed %d times, given up", p.Action, strings.Join(failed, ", "), p.Alert.ID, p.Attempts)
 				delete(s.pending, p.Key)
+				detail = fmt.Sprintf("attempt %d of %d: given up", p.Attempts, maxUndoAttempts)
 			default:
 				p.Actions = failed
 				p.Due = s.now().Add(undoRetryDelay)
+				retry = p.Due
+				detail = fmt.Sprintf("attempt %d of %d: tried again at the due time", p.Attempts, maxUndoAttempts)
 				log.Printf("action %s: undo (%s) for alert %s will be tried again at %s", p.Action, strings.Join(failed, ", "), p.Alert.ID, p.Due.Format(time.DateTime))
 			}
+		} else {
+			detail = "not tried again: postponed by a later alert"
 		}
 		s.mu.Unlock()
+		for _, run := range errs {
+			run.Due, run.Detail = retry, detail
+			s.report(p.Alert, run)
+		}
 	}
 }
 
-// undo runs the undo actions of p and returns the ids of those that failed.
-func (s *Scheduler) undo(p *Pending) []string {
+// undo runs the undo actions of p and returns the ids of those that failed,
+// with their runs to report. It reports those that did not fail.
+func (s *Scheduler) undo(p *Pending) ([]string, []event.ActionRun) {
 	// The undo actions get a copy of the alert that tells what they undo.
 	a := *p.Alert
 	a.Metadata = maps.Clone(a.Metadata)
@@ -319,20 +358,28 @@ func (s *Scheduler) undo(p *Pending) []string {
 	a.Metadata["undo_of"] = p.Action
 
 	var failed []string
+	var runs []event.ActionRun
 	for _, id := range p.Actions {
 		act := s.actions[id]
 		if act == nil {
 			log.Printf("action %s: undo action %s is gone or disabled, not run for alert %s", p.Action, id, a.ID)
+			s.report(p.Alert, event.ActionRun{Action: id, UndoOf: p.Action, Status: event.ActionSkipped, Detail: "the undo action is gone or disabled"})
 			continue
 		}
 		verbose.Debugf("action %s: undoing %s for alert %s (%s)", id, p.Action, a.ID, a.RuleID)
+		start := s.now()
 		// Not cancelled by a shutdown: the action's own timeout applies.
-		if err := act.Execute(context.Background(), &a); err != nil {
+		err := act.Execute(context.Background(), &a)
+		run := event.ActionRun{Time: s.now(), Action: id, UndoOf: p.Action, Status: event.ActionOK, Duration: s.now().Sub(start).Round(time.Millisecond)}
+		if err != nil {
 			log.Printf("action %s (undo of %s) for alert %s (%s): %v", id, p.Action, a.ID, a.RuleID, err)
+			run.Status, run.Error = event.ActionFailed, err.Error()
 			failed = append(failed, id)
+			runs = append(runs, run)
 			continue
 		}
 		verbose.Infof("action %s: undid %s for alert %s (%s)", id, p.Action, a.ID, a.RuleID)
+		s.report(p.Alert, run)
 	}
-	return failed
+	return failed, runs
 }

@@ -151,6 +151,7 @@ func New(cfg *config.Config) (*Engine, error) {
 		MaxLifetime: lifetime,
 	}
 	e.info.Started = e.stats.Started()
+	e.undo.Report = e.recordAction
 	if len(undos) > 0 && cfg.StateFile == "" {
 		log.Print("warning: without a state file, the actions not undone yet when wolverine stops are never undone")
 	}
@@ -169,15 +170,17 @@ func New(cfg *config.Config) (*Engine, error) {
 			return nil, err
 		}
 		e.restoreRules(time.Now().Add(-lifetime))
+		// The alerts first: restoring the undos may add to their action
+		// logs.
+		if saved := e.state.Alerts(); len(saved) > 0 {
+			n := e.history.restore(saved, time.Now().Add(-lifetime))
+			verbose.Infof("state file: %d alerts restored, %d expired", n, len(saved)-n)
+		}
 		var pending []action.Pending
 		for _, u := range e.state.Undos() {
 			pending = append(pending, action.Pending(u))
 		}
 		e.undo.Restore(pending)
-		if saved := e.state.Alerts(); len(saved) > 0 {
-			n := e.history.restore(saved, time.Now().Add(-lifetime))
-			verbose.Infof("state file: %d alerts restored, %d expired", n, len(saved)-n)
-		}
 	}
 	return e, nil
 }
@@ -246,14 +249,29 @@ func (e *Engine) Info() Info { return e.info }
 func (e *Engine) Stats() *stats.Store { return e.stats }
 
 // Watch returns a channel that receives the alerts raised from now on, and
-// a function to call when done. The channel is closed when Run returns, or
-// if the receiver lags too far behind.
-func (e *Engine) Watch() (<-chan *event.Alert, func()) { return e.watchers.subscribe() }
+// the runs added to their action logs, and a function to call when done.
+// The channel is closed when Run returns, or if the receiver lags too far
+// behind.
+func (e *Engine) Watch() (<-chan Notice, func()) { return e.watchers.subscribe() }
 
 // RecentAlerts returns the alerts raised within the maximum lifetime, oldest
 // first, with all their events.
 func (e *Engine) RecentAlerts() []*event.Alert {
 	return e.history.list()
+}
+
+// AlertRecords returns the alerts raised within the maximum lifetime, oldest
+// first, with all their events and their action logs.
+func (e *Engine) AlertRecords() []AlertRecord {
+	return e.history.records()
+}
+
+// recordAction adds a run to the action log of an alert (if still
+// memorized) and tells the watchers.
+func (e *Engine) recordAction(alertID string, run event.ActionRun) {
+	if a := e.history.record(alertID, run); a != nil {
+		e.watchers.publish(Notice{Alert: a, Action: &run})
+	}
 }
 
 // buildExclude resolves the exclude lists, checks those the sources and
@@ -411,7 +429,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}()
 
 	e.undo.Start()
-	dispatcher := action.NewDispatcher(ctx, e.routes, 100, e.undo)
+	dispatcher := action.NewDispatcher(ctx, e.routes, 100, e.undo, e.recordAction)
 	var alertEnc, eventEnc *json.Encoder
 	if e.Alerts != nil {
 		alertEnc = json.NewEncoder(e.Alerts)
@@ -475,8 +493,9 @@ func (e *Engine) Run(ctx context.Context) error {
 					log.Printf("writing alert: %v", err)
 				}
 			}
+			// The alert first, then what its actions do.
+			e.watchers.publish(Notice{Alert: a})
 			dispatcher.Dispatch(a)
-			e.watchers.publish(a)
 		}
 	}
 
@@ -494,9 +513,10 @@ loop:
 			handle(it)
 		}
 	}
-	e.watchers.close()
 	dispatcher.Close()
 	e.undo.Stop()
+	// After the actions: the watchers get what they did.
+	e.watchers.close()
 	e.saveState()
 	if pending, _ := e.undo.Pending(); len(pending) > 0 {
 		where := "saved in the state file"

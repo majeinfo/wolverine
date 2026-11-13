@@ -74,8 +74,8 @@
   }
 
   // --- formatting ----------------------------------------------------------
-  function timeLabel(d, withDate) {
-    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  function timeLabel(d, withDate, withSeconds) {
+    const hm = d.toLocaleTimeString([], withSeconds ? { hour: "2-digit", minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
     if (!withDate) return hm;
     return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + hm;
   }
@@ -450,12 +450,131 @@
     $("rules").replaceChildren(...ruleRows);
   }
 
+  // --- action log ----------------------------------------------------------
+  // The status of an action run: its level (for the icon color), icon and
+  // label. Never color alone: the label always says it.
+  const ACTION_STATUS = {
+    ok: ["good", "✓", "done"],
+    failed: ["critical", "✕", "failed"],
+    dropped: ["critical", "✕", "dropped"],
+    planned: ["pending", "◷", "planned"],
+    postponed: ["pending", "↷", "postponed"],
+    skipped: ["info", "–", "skipped"],
+  };
+
+  function actionStatus(run, withDue) {
+    const [level, icon, label] = ACTION_STATUS[run.Status] || ["info", "?", run.Status || "?"];
+    const b = el("span", "status");
+    b.dataset.level = level;
+    let text = label;
+    if (withDue && run.Due && (run.Status === "planned" || run.Status === "failed")) {
+      text += (run.Status === "failed" ? ", retry " : " ") + timeLabel(new Date(run.Due), !sameDay(new Date(run.Due)), true);
+    }
+    b.append(el("span", "status-icon", icon), document.createTextNode(text));
+    return b;
+  }
+
+  function sameDay(d) { return d.toDateString() === new Date().toDateString(); }
+
+  function actionName(run) { return run.UndoOf ? run.Action + " (undo)" : run.Action; }
+
+  // latestRuns returns the last run of each action (an undo action apart
+  // from the same action run directly), in the order they first appear.
+  function latestRuns(runs) {
+    const latest = new Map();
+    for (const r of runs || []) {
+      const k = r.Action + "\u0000" + (r.UndoOf || "");
+      latest.delete(k);
+      latest.set(k, r);
+    }
+    const order = new Map();
+    (runs || []).forEach((r, i) => { const k = r.Action + "\u0000" + (r.UndoOf || ""); if (!order.has(k)) order.set(k, i); });
+    return [...latest.entries()].sort((a, b) => order.get(a[0]) - order.get(b[0])).map((e) => e[1]);
+  }
+
+  function actionsSummary(a) {
+    const td = el("td", "actions");
+    const runs = latestRuns(a.Actions);
+    if (!runs.length) {
+      td.append(el("span", "muted", ruleActions(a.RuleID).length ? "pending" : "none"));
+      return td;
+    }
+    for (const r of runs) {
+      const item = el("span", "action-item");
+      item.append(el("span", "action-name", actionName(r)), actionStatus(r, false));
+      td.append(item);
+    }
+    return td;
+  }
+
+  function ruleActions(ruleID) {
+    const r = state.info && (state.info.rules || []).find((x) => x.id === ruleID);
+    return (r && r.actions) || [];
+  }
+
+  // actionLog renders the action log of an alert, oldest first.
+  function actionLog(a) {
+    const wrap = el("div", "action-log");
+    wrap.append(el("h3", "", "Actions"));
+    const runs = a.Actions || [];
+    if (!runs.length) {
+      const acts = ruleActions(a.RuleID);
+      wrap.append(el("p", "muted", acts.length ? "Not run yet: " + acts.join(", ") + "." : "The rule has no action."));
+      return wrap;
+    }
+    const table = el("table", "data log");
+    const head = el("tr");
+    for (const h of ["Time", "Action", "Status", "Details"]) head.append(el("th", "", h));
+    const thead = el("thead");
+    thead.append(head);
+    const body = el("tbody");
+    for (const r of runs) {
+      const tr = el("tr");
+      const status = el("td");
+      status.append(actionStatus(r, true));
+      const details = [];
+      if (r.UndoOf) details.push("undoes " + r.UndoOf);
+      if (r.Duration) details.push("took " + durationLabel(r.Duration));
+      if (r.Detail) details.push(r.Detail);
+      const det = el("td", "detail", details.join(" · "));
+      if (r.Error) det.append(el("div", "error", r.Error));
+      tr.append(cell(timeLabel(new Date(r.Time), !sameDay(new Date(r.Time)), true), "time"), cell(r.Action), status, det);
+      body.append(tr);
+    }
+    table.append(thead, body);
+    const tw = el("div", "table-wrap");
+    tw.append(table);
+    wrap.append(tw);
+    return wrap;
+  }
+
+  // durationLabel formats a Go duration in nanoseconds.
+  function durationLabel(ns) {
+    const ms = ns / 1e6;
+    if (ms < 1000) return Math.round(ms) + " ms";
+    return (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + " s";
+  }
+
+  // addRun adds a run reported by the watch stream to the alert shown.
+  function addRun(n) {
+    const a = state.feed.find((x) => x.ID === n.AlertID);
+    if (!a) return;
+    const run = Object.assign({}, n);
+    delete run.AlertID;
+    delete run.RuleID;
+    a.Actions = a.Actions || [];
+    // The feed may have been loaded after this run was recorded.
+    if (a.Actions.some((r) => r.Time === run.Time && r.Action === run.Action && r.Status === run.Status && (r.UndoOf || "") === (run.UndoOf || ""))) return;
+    a.Actions.push(run);
+    renderFeed(null, new Set([a.ID]));
+  }
+
   function alertValue(a) {
     const v = a.Metadata && a.Metadata.value;
     return v === undefined || v === null ? "" : String(v);
   }
 
-  function renderFeed(newIDs) {
+  function renderFeed(newIDs, updatedIDs) {
     const rows = [];
     for (const a of state.feed) {
       const tr = el("tr", "alert-row");
@@ -464,7 +583,9 @@
       tr.setAttribute("aria-expanded", state.open.has(a.ID) ? "true" : "false");
       const sev = el("td");
       sev.append(severityBadge(a.Severity));
-      tr.append(cell(timeLabel(new Date(a.Timestamp), true), "time"), sev, cell(a.RuleID), cell(alertValue(a)), cell(a.Message, "message"));
+      const summary = actionsSummary(a);
+      if (updatedIDs && updatedIDs.has(a.ID)) summary.classList.add("new");
+      tr.append(cell(timeLabel(new Date(a.Timestamp), true), "time"), sev, cell(a.RuleID), cell(alertValue(a)), cell(a.Message, "message"), summary);
       const toggle = () => {
         if (state.open.has(a.ID)) state.open.delete(a.ID); else state.open.add(a.ID);
         renderFeed();
@@ -475,7 +596,7 @@
       if (state.open.has(a.ID)) {
         const d = el("tr", "details");
         const td = el("td");
-        td.colSpan = 5;
+        td.colSpan = 6;
         const evs = a.Events || [];
         const last = evs.length ? evs[evs.length - 1] : null;
         const lines = ["Alert " + a.ID];
@@ -486,7 +607,7 @@
           lines.push("No event included.");
         }
         if (a.Metadata && a.Metadata.count !== undefined) lines.push(a.Metadata.count + " events in total");
-        td.append(el("pre", "", lines.join("\n")));
+        td.append(el("pre", "", lines.join("\n")), actionLog(a));
         d.append(td);
         rows.push(d);
       }
@@ -494,7 +615,7 @@
     if (!rows.length) {
       const tr = el("tr");
       const td = cell("No alert in this range", "muted");
-      td.colSpan = 5;
+      td.colSpan = 6;
       tr.append(td);
       rows.push(tr);
     }
@@ -524,7 +645,7 @@
     state.feedIDs = new Set(r.alerts.map((a) => a.ID));
     renderFeed();
     $("sub-feed").textContent = (r.total > r.alerts.length ? "Latest " + r.alerts.length + " of " + fmt.format(r.total) : fmt.format(r.total)) +
-      " in this range, newest first; new alerts appear as they are raised. Select a row for its last log line.";
+      " in this range, newest first; new alerts and actions appear as they happen. Select a row for its last log line and its action log.";
   }
 
   async function load(withFeed) {
@@ -597,6 +718,8 @@
             }
             if (type === "alert" && data) {
               try { addAlert(JSON.parse(data)); } catch (e) { /* ignored */ }
+            } else if (type === "action" && data) {
+              try { addRun(JSON.parse(data)); } catch (e) { /* ignored */ }
             }
           }
         }

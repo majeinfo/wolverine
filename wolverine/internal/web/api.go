@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"wolverine/internal/engine"
 	"wolverine/internal/event"
 	"wolverine/internal/stats"
 )
@@ -226,12 +227,35 @@ func (f alertFilter) apply(a *event.Alert) *event.Alert {
 	return &c
 }
 
+// alertView is an alert with its action log: what its actions did, and
+// the undo actions planned or run, in that order.
+type alertView struct {
+	*event.Alert
+	Actions []event.ActionRun
+}
+
+func (f alertFilter) view(r engine.AlertRecord) alertView {
+	v := alertView{f.apply(r.Alert), r.Actions}
+	if v.Actions == nil {
+		v.Actions = []event.ActionRun{}
+	}
+	return v
+}
+
+// actionNotice is a run added to the action log of an alert, as sent by
+// /alerts/watch.
+type actionNotice struct {
+	AlertID string
+	RuleID  string
+	event.ActionRun
+}
+
 // alertsResponse is the result of /alerts.
 type alertsResponse struct {
 	// Total is the number of alerts that match, Alerts the first limit of
 	// them, newest first.
-	Total  int            `json:"total"`
-	Alerts []*event.Alert `json:"alerts"`
+	Total  int         `json:"total"`
+	Alerts []alertView `json:"alerts"`
 }
 
 // alerts gives the alerts memorized (within the maximum lifetime) whose
@@ -252,25 +276,50 @@ func (s *Server) alerts(r *http.Request) (any, error) {
 			return nil, badRequest("limit: %q: between 1 and %d", v, maxAlerts)
 		}
 	}
-	all := s.backend.RecentAlerts()
-	resp := alertsResponse{Alerts: []*event.Alert{}}
+	all := s.backend.AlertRecords()
+	resp := alertsResponse{Alerts: []alertView{}}
 	for i := len(all) - 1; i >= 0; i-- {
-		a := all[i]
+		a := all[i].Alert
 		if a.Timestamp.Before(from) || !a.Timestamp.Before(to) || !f.match(a) {
 			continue
 		}
 		resp.Total++
 		if len(resp.Alerts) < limit {
-			resp.Alerts = append(resp.Alerts, f.apply(a))
+			resp.Alerts = append(resp.Alerts, f.view(all[i]))
 		}
 	}
 	return resp, nil
 }
 
-// watch streams the alerts raised from now on, as server-sent events:
+// alert gives an alert memorized, by id, with its action log and all its
+// events (unless events=last or none).
+func (s *Server) alert(r *http.Request) (any, error) {
+	q := r.URL.Query()
+	if q.Get("events") == "" {
+		q.Set("events", "all")
+	}
+	f, err := parseAlertFilter(q)
+	if err != nil {
+		return nil, err
+	}
+	id := r.PathValue("id")
+	for _, rec := range s.backend.AlertRecords() {
+		if rec.Alert.ID == id {
+			return f.view(rec), nil
+		}
+	}
+	return nil, &apiError{http.StatusNotFound, fmt.Sprintf("alert %q: not found (or expired, see max_lifetime)", id)}
+}
+
+// watch streams the alerts raised from now on, and what their actions do,
+// as server-sent events:
 //
 //	event: alert
-//	data: {"ID":...}
+//	id: <alert id>
+//	data: {"ID":..., "Actions":[]}
+//
+//	event: action
+//	data: {"AlertID":..., "RuleID":..., "Action":..., "Status":...}
 //
 // A comment is sent every heartbeat. The stream ends when wolverine stops
 // or if the client reads too slowly: it should reconnect, and may fetch
@@ -288,7 +337,7 @@ func (s *Server) watch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.watchers.Add(-1)
 
-	alerts, cancel := s.backend.Watch()
+	notices, cancel := s.backend.Watch()
 	defer cancel()
 	rc := http.NewResponseController(w)
 	h := w.Header()
@@ -317,14 +366,22 @@ func (s *Server) watch(w http.ResponseWriter, r *http.Request) {
 			if !send(": heartbeat\n\n") {
 				return
 			}
-		case a, ok := <-alerts:
+		case n, ok := <-notices:
 			if !ok {
 				return // wolverine stops, or the client lagged
 			}
-			if !f.match(a) {
+			a := n.Alert
+			if a == nil || !f.match(a) {
 				continue
 			}
-			b, err := json.Marshal(f.apply(a))
+			if n.Action != nil {
+				b, err := json.Marshal(actionNotice{a.ID, a.RuleID, *n.Action})
+				if err != nil || !send("event: action\ndata: %s\n\n", b) {
+					return
+				}
+				continue
+			}
+			b, err := json.Marshal(f.view(engine.AlertRecord{Alert: a}))
 			if err != nil {
 				continue
 			}

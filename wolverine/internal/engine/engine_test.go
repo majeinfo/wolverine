@@ -778,15 +778,43 @@ func TestRunUndo(t *testing.T) {
 			{ID: "unblock", Type: "webhook", Webhook: config.Webhook{URL: srv.URL + "/unblock"}},
 		},
 	}
-	run := func() {
+	// run runs wolverine and returns the action log of the alert, and the
+	// notices watched.
+	run := func() (string, string) {
 		t.Helper()
 		eng, err := New(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
+		notices, cancel := eng.Watch()
+		defer cancel()
 		if err := eng.Run(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+		var watched []string
+		for n := range notices {
+			if n.Action == nil {
+				watched = append(watched, "alert "+n.Alert.ID)
+			} else {
+				watched = append(watched, n.Action.Action+" "+n.Action.Status)
+			}
+		}
+		records := eng.AlertRecords()
+		if len(records) != 1 {
+			t.Fatalf("%d alerts", len(records))
+		}
+		var log []string
+		for _, r := range records[0].Actions {
+			line := r.Action + " " + r.Status
+			if r.UndoOf != "" {
+				line = r.Action + "<" + r.UndoOf + " " + r.Status
+			}
+			if r.Time.IsZero() {
+				line += " (no time)"
+			}
+			log = append(log, line)
+		}
+		return strings.Join(log, ", "), strings.Join(watched, ", ")
 	}
 	savedUndos := func() []state.Undo {
 		t.Helper()
@@ -797,9 +825,16 @@ func TestRunUndo(t *testing.T) {
 		return st.Undos()
 	}
 
-	run()
+	log, watched := run()
 	if got := called(); got != "/block" {
 		t.Fatalf("first run: %q", got)
+	}
+	id := ""
+	if records := (func() []state.Alert { st, _ := state.Open(cfg.StateFile); return st.Alerts() })(); len(records) == 1 {
+		id = records[0].Alert.ID
+	}
+	if log != "block ok, unblock<block planned" || watched != "alert "+id+", block ok, unblock planned" {
+		t.Errorf("first run: log %q, watched %q", log, watched)
 	}
 	undos := savedUndos()
 	if len(undos) != 1 || undos[0].Action != "block" || time.Until(undos[0].Due) < 59*time.Minute {
@@ -807,7 +842,10 @@ func TestRunUndo(t *testing.T) {
 	}
 
 	// Not due yet: still pending after a restart.
-	run()
+	// The action log is kept in the state file.
+	if log, watched := run(); log != "block ok, unblock<block planned" || watched != "" {
+		t.Errorf("second run: log %q, watched %q", log, watched)
+	}
 	if got := called(); got != "" || len(savedUndos()) != 1 {
 		t.Fatalf("second run: %q, %+v", got, savedUndos())
 	}
@@ -817,7 +855,9 @@ func TestRunUndo(t *testing.T) {
 	past := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
 	b = regexp.MustCompile(`"due": "[^"]*"`).ReplaceAll(b, []byte(`"due": "`+past+`"`))
 	os.WriteFile(cfg.StateFile, b, 0o600)
-	run()
+	if log, _ := run(); log != "block ok, unblock<block planned, unblock<block ok" {
+		t.Errorf("third run: log %q", log)
+	}
 	if got := called(); got != "/unblock (undo of block)" || len(savedUndos()) != 0 {
 		t.Fatalf("third run: %q, %+v", got, savedUndos())
 	}
@@ -856,9 +896,9 @@ func TestRunStatsAndWatch(t *testing.T) {
 	if err := eng.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	a, ok := <-alerts
-	if !ok || a.RuleID != "r" {
-		t.Fatalf("watched: %+v %v", a, ok)
+	n, ok := <-alerts
+	if !ok || n.Alert.RuleID != "r" || n.Action != nil {
+		t.Fatalf("watched: %+v %v", n, ok)
 	}
 	if _, ok := <-alerts; ok {
 		t.Error("the channel should be closed when Run returns")

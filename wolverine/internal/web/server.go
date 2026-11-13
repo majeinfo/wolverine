@@ -27,7 +27,6 @@ import (
 
 	"wolverine/internal/config"
 	"wolverine/internal/engine"
-	"wolverine/internal/event"
 	"wolverine/internal/stats"
 	"wolverine/internal/verbose"
 )
@@ -39,8 +38,8 @@ var uiFiles embed.FS
 type Backend interface {
 	Info() engine.Info
 	Stats() *stats.Store
-	RecentAlerts() []*event.Alert
-	Watch() (<-chan *event.Alert, func())
+	AlertRecords() []engine.AlertRecord
+	Watch() (<-chan engine.Notice, func())
 }
 
 // maxWatchers is the number of /alerts/watch connections served at once.
@@ -125,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/stats/series", s.api(s.series))
 	mux.Handle("GET /api/v1/alerts", s.api(s.alerts))
 	mux.Handle("GET /api/v1/alerts/watch", s.auth(http.HandlerFunc(s.watch)))
+	mux.Handle("GET /api/v1/alerts/{id}", s.api(s.alert))
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown API endpoint %s %s", r.Method, r.URL.Path)
 	})
