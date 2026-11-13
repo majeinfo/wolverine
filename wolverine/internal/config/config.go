@@ -132,7 +132,8 @@ type Source struct {
 	ExcludeIf string `yaml:"exclude_if"`
 }
 
-// AWS holds the credentials and region of an aws-s3 source. Without any of
+// AWS holds the credentials and region of an aws-s3 source or an
+// aws-waf-ipset action. Without any of
 // them, the AWS SDK's defaults apply: the AWS_* environment variables, then
 // the default profile of ~/.aws/credentials and ~/.aws/config, then the
 // role of the EC2 instance or ECS task.
@@ -151,8 +152,8 @@ type AWS struct {
 	AccessKeyIDEnv     string `yaml:"access_key_id_env"`
 	SecretAccessKeyEnv string `yaml:"secret_access_key_env"`
 	SessionTokenEnv    string `yaml:"session_token_env"`
-	// EndpointURL replaces the AWS endpoints of SQS and S3, for S3- and
-	// SQS-compatible services (LocalStack, MinIO...).
+	// EndpointURL replaces the AWS endpoints (SQS and S3, or WAF), for
+	// compatible services (LocalStack, MinIO...).
 	EndpointURL string `yaml:"endpoint_url"`
 }
 
@@ -176,6 +177,11 @@ type Action struct {
 	// webhook
 	Webhook Webhook `yaml:"webhook"`
 
+	// aws-waf-ipset: the IP set, and the credentials and region, as for an
+	// aws-s3 source.
+	IPSet WAFIPSet `yaml:"ipset"`
+	AWS   AWS      `yaml:"aws"`
+
 	// Undo runs other actions some time after this one succeeded, e.g. to
 	// unblock an IP address blocked by this action.
 	Undo *Undo `yaml:"undo"`
@@ -188,6 +194,23 @@ type Undo struct {
 	After time.Duration `yaml:"after"`
 	// Actions are the ids of the actions run then, with the same alert.
 	Actions []string `yaml:"actions"`
+}
+
+// WAFIPSet is an AWS WAF (v2) IP set, to which an aws-waf-ipset action adds
+// an address of the alert, or from which it removes it.
+type WAFIPSet struct {
+	// Name of the IP set.
+	Name string `yaml:"name"`
+	// ID of the IP set. Default: looked up by name.
+	ID string `yaml:"id"`
+	// Scope is REGIONAL (default: ALB, API Gateway...) or CLOUDFRONT.
+	Scope string `yaml:"scope"`
+	// Operation is add (default) or remove, e.g. in the undo of an add.
+	Operation string `yaml:"operation"`
+	// Field is the event field holding the address, in the last event of
+	// the alert (default: SourceIP).
+	Field   string        `yaml:"field"`
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 type Webhook struct {

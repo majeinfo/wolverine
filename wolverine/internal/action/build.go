@@ -1,6 +1,7 @@
 package action
 
 import (
+	"context"
 	"fmt"
 	"net/mail"
 	"net/url"
@@ -8,9 +9,15 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/wafv2"
+	"github.com/aws/aws-sdk-go-v2/service/wafv2/types"
+
+	"wolverine/internal/action/awswaf"
 	"wolverine/internal/action/email"
 	"wolverine/internal/action/ssh"
 	"wolverine/internal/action/webhook"
+	"wolverine/internal/awsconf"
 	"wolverine/internal/config"
 )
 
@@ -47,6 +54,8 @@ func build(c config.Action) (Action, error) {
 		return buildSSH(c)
 	case "webhook":
 		return buildWebhook(c)
+	case "aws-waf-ipset":
+		return buildWAFIPSet(c)
 	case "":
 		return nil, fmt.Errorf("missing type")
 	default:
@@ -184,6 +193,59 @@ func buildWebhook(c config.Action) (Action, error) {
 		Retries:   c.Webhook.Retries,
 		MaxEvents: c.MaxEvents,
 	}, nil
+}
+
+func buildWAFIPSet(c config.Action) (Action, error) {
+	s := c.IPSet
+	if s.Name == "" {
+		return nil, fmt.Errorf("ipset.name is required")
+	}
+	var remove bool
+	switch s.Operation {
+	case "", "add":
+	case "remove":
+		remove = true
+	default:
+		return nil, fmt.Errorf("ipset.operation %q: add or remove", s.Operation)
+	}
+	field := s.Field
+	if field == "" {
+		field = "SourceIP"
+	}
+	if strings.TrimSpace(field) != field {
+		return nil, fmt.Errorf("ipset.field %q: unexpected spaces", field)
+	}
+	awsCfg := c.AWS
+	var scope types.Scope
+	switch s.Scope {
+	case "", "REGIONAL":
+		scope = types.ScopeRegional
+	case "CLOUDFRONT":
+		// The IP sets of CloudFront are in us-east-1.
+		if awsCfg.Region != "" && awsCfg.Region != "us-east-1" {
+			return nil, fmt.Errorf("ipset.scope CLOUDFRONT: the region must be us-east-1, not %s (aws.region)", awsCfg.Region)
+		}
+		awsCfg.Region = "us-east-1"
+		scope = types.ScopeCloudfront
+	default:
+		return nil, fmt.Errorf("ipset.scope %q: REGIONAL or CLOUDFRONT", s.Scope)
+	}
+	if s.Timeout < 0 {
+		return nil, fmt.Errorf("ipset.timeout must not be negative")
+	}
+	cfg, _, err := awsconf.Load(context.Background(), awsCfg)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Region == "" {
+		return nil, fmt.Errorf("aws: no region: set aws.region")
+	}
+	client := wafv2.NewFromConfig(cfg, func(o *wafv2.Options) {
+		if awsCfg.EndpointURL != "" {
+			o.BaseEndpoint = aws.String(awsCfg.EndpointURL)
+		}
+	})
+	return awswaf.New(c.ID, client, s.Name, s.ID, scope, field, remove, s.Timeout), nil
 }
 
 // Routes maps each enabled rule id to the actions it triggers.

@@ -2,10 +2,13 @@ package action
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"wolverine/internal/action/awswaf"
 	"wolverine/internal/action/webhook"
 	"wolverine/internal/config"
 	"wolverine/internal/event"
@@ -197,5 +200,84 @@ func TestDispatcher(t *testing.T) {
 	d.Close()
 	if strings.Join(rec.got, ",") != "a1,a3" {
 		t.Errorf("got %v, want [a1 a3]", rec.got)
+	}
+}
+
+func TestBuildWAFIPSet(t *testing.T) {
+	t.Setenv("WAF_KEY", "AKIAEXAMPLE")
+	t.Setenv("WAF_SECRET", "secret")
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
+	cfg := func(mod func(*config.Action)) config.Action {
+		c := config.Action{ID: "waf", Type: "aws-waf-ipset",
+			IPSet: config.WAFIPSet{Name: "blocklist"},
+			AWS:   config.AWS{Region: "eu-west-3", AccessKeyIDEnv: "WAF_KEY", SecretAccessKeyEnv: "WAF_SECRET"},
+		}
+		if mod != nil {
+			mod(&c)
+		}
+		return c
+	}
+	a, err := build(cfg(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := a.(*awswaf.IPSet); w.Name() != "waf" || w.SetName != "blocklist" || w.Scope != "REGIONAL" || w.Field != "SourceIP" || w.Remove {
+		t.Errorf("default: %+v", w)
+	}
+	// CloudFront IP sets are in us-east-1.
+	a, err = build(cfg(func(c *config.Action) {
+		c.IPSet.Scope, c.IPSet.Operation, c.IPSet.Field = "CLOUDFRONT", "remove", "client_ip"
+		c.AWS.Region = ""
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := a.(*awswaf.IPSet); w.Scope != "CLOUDFRONT" || !w.Remove || w.Field != "client_ip" {
+		t.Errorf("cloudfront: %+v", w)
+	}
+
+	for _, tt := range []struct {
+		mod  func(*config.Action)
+		want string
+	}{
+		{func(c *config.Action) { c.IPSet.Name = "" }, "ipset.name is required"},
+		{func(c *config.Action) { c.IPSet.Operation = "delete" }, `ipset.operation "delete": add or remove`},
+		{func(c *config.Action) { c.IPSet.Scope = "GLOBAL" }, `ipset.scope "GLOBAL"`},
+		{func(c *config.Action) { c.IPSet.Scope = "CLOUDFRONT" }, "the region must be us-east-1, not eu-west-3"},
+		{func(c *config.Action) { c.IPSet.Field = " SourceIP" }, "unexpected spaces"},
+		{func(c *config.Action) { c.AWS.Region = "" }, "aws: no region: set aws.region"},
+		{func(c *config.Action) { c.AWS.SecretAccessKeyEnv = "" }, "aws: access_key_id_env and secret_access_key_env go together"},
+		{func(c *config.Action) { c.AWS.AccessKeyIDEnv = "UNSET_WAF_KEY" }, "UNSET_WAF_KEY is not set"},
+		{func(c *config.Action) { c.AWS.Profile = "p" }, "aws: set either keys"},
+		{func(c *config.Action) { c.AWS = config.AWS{CredentialsFile: "/nonexistent/credentials"} }, "aws: credentials_file"},
+		{func(c *config.Action) { c.AWS = config.AWS{Profile: "missing", Region: "eu-west-3"} }, "missing"},
+	} {
+		if _, err := build(cfg(tt.mod)); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("got %v, want %q", err, tt.want)
+		}
+	}
+}
+
+// The credentials of an aws-waf-ipset action come from the same settings as
+// those of an aws-s3 source: here a profile of given files.
+func TestBuildWAFIPSetProfile(t *testing.T) {
+	dir := t.TempDir()
+	creds := filepath.Join(dir, "credentials")
+	conf := filepath.Join(dir, "config")
+	os.WriteFile(creds, []byte("[wolverine]\naws_access_key_id = AKIAPROFILE\naws_secret_access_key = s\n"), 0o600)
+	os.WriteFile(conf, []byte("[profile wolverine]\nregion = eu-central-1\n"), 0o600)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_PROFILE", "")
+	a, err := build(config.Action{ID: "waf", Type: "aws-waf-ipset",
+		IPSet: config.WAFIPSet{Name: "blocklist"},
+		AWS:   config.AWS{Profile: "wolverine", CredentialsFile: creds, ConfigFile: conf},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := a.(*awswaf.IPSet); w.Client == nil {
+		t.Fatal("no client")
 	}
 }

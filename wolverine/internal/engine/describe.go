@@ -137,6 +137,10 @@ func actionTarget(a config.Action) string {
 		return fmt.Sprintf("to %s via %s:%d", strings.Join(a.To, ", "), a.SMTP.Host, a.SMTP.Port)
 	case "ssh":
 		return "on " + a.SSH.Host
+	case "aws-waf-ipset":
+		op := or(a.IPSet.Operation, "add")
+		return fmt.Sprintf("%s %s of the last event %s WAF IP set %s (%s%s)", op, or(a.IPSet.Field, "SourceIP"),
+			map[bool]string{true: "to", false: "from"}[op == "add"], a.IPSet.Name, or(a.IPSet.Scope, "REGIONAL"), prefixed(", ", a.AWS.Region))
 	case "webhook":
 		if a.Webhook.URLEnv != "" {
 			return "to the URL in $" + a.Webhook.URLEnv
@@ -146,6 +150,13 @@ func actionTarget(a config.Action) string {
 		}
 	}
 	return ""
+}
+
+func prefixed(prefix, s string) string {
+	if s == "" {
+		return ""
+	}
+	return prefix + s
 }
 
 func or(s, def string) string {

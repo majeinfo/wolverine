@@ -229,6 +229,37 @@ actions:
       identity_file: /etc/wolverine/id_ed25519
     command: sudo ipset del wolverine-blocklist {{.SourceIP}} -exist
 
+  # Add the source IP of the alert to an AWS WAF (v2) IP set, blocked by a
+  # rule of a web ACL, and remove it an hour later (waf-unblock). The IP set
+  # is looked up by name unless ipset.id is set. Credentials and region in
+  # aws, as for the aws-s3 source: keys in environment variables, a profile,
+  # or the AWS SDK's defaults (see the README for the IAM policy).
+  - id: waf-block
+    type: aws-waf-ipset
+    disabled: true
+    ipset:
+      name: wolverine-blocklist
+      scope: REGIONAL            # or CLOUDFRONT (us-east-1)
+    aws:
+      region: eu-west-3
+      # profile: wolverine
+      # credentials_file: /etc/wolverine/aws/credentials
+      # access_key_id_env: WOLVERINE_WAF_KEY_ID
+      # secret_access_key_env: WOLVERINE_WAF_SECRET_KEY
+    undo:
+      after: 1h
+      actions: [waf-unblock]
+
+  # The undo of waf-block. It must be enabled when waf-block is.
+  - id: waf-unblock
+    type: aws-waf-ipset
+    disabled: true
+    ipset:
+      name: wolverine-blocklist
+      operation: remove
+    aws:
+      region: eu-west-3
+
   # POST the alert as JSON (as on stdout with -detailed-events, at most
   # max_events events) to an HTTP endpoint.
   # Network errors, 429 and 5xx are retried with an exponential backoff.

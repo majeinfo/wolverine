@@ -575,6 +575,96 @@ wolverine refuses to start. When running as a service, put the variables in
   [Exclude lists](#exclude-lists)).
 - **Temporary blocks:** see [undoing an action](#undoing-an-action).
 
+#### `aws-waf-ipset`: block an address in AWS WAF
+
+Adds the source IP address of the alert to an AWS WAF (v2) IP set, or
+removes it. A web ACL rule that blocks the addresses of the IP set then
+blocks the attacker in front of a load balancer, an API Gateway or a
+CloudFront distribution.
+
+```yaml
+- id: waf-block
+  type: aws-waf-ipset
+  ipset:
+    name: wolverine-blocklist
+    id: 1a2b3c4d-5678-90ab-cdef-111122223333   # optional: looked up by name
+    scope: REGIONAL            # default; CLOUDFRONT for CloudFront
+  aws:                         # as for an aws-s3 source
+    region: eu-west-3
+    profile: wolverine
+    credentials_file: /etc/wolverine/aws/credentials
+  undo:
+    after: 1h
+    actions: [waf-unblock]
+
+- id: waf-unblock
+  type: aws-waf-ipset
+  ipset:
+    name: wolverine-blocklist
+    operation: remove
+  aws:
+    region: eu-west-3
+    access_key_id_env: WOLVERINE_WAF_KEY_ID          # keys in environment variables
+    secret_access_key_env: WOLVERINE_WAF_SECRET_KEY
+```
+
+| Setting | Meaning |
+|---|---|
+| `ipset.name` | the name of the IP set (required) |
+| `ipset.id` | its id. Without it, the IP set is looked up by name the first time the action runs |
+| `ipset.scope` | `REGIONAL` (default) or `CLOUDFRONT`. CloudFront IP sets are in `us-east-1`, used when `aws.region` is not set |
+| `ipset.operation` | `add` (default) or `remove` |
+| `ipset.field` | the event field holding the address, in the last event of the alert (default `SourceIP`), e.g. a `client_ip` group behind a proxy |
+| `ipset.timeout` | for the calls to AWS (default `30s`) |
+
+**Credentials and region**, per action, in `aws`: the same settings as for
+an [`aws-s3` source](#aws-s3-log-files-written-to-an-s3-bucket).
+
+| Setting | Credentials used |
+|---|---|
+| `access_key_id_env`, `secret_access_key_env` (and `session_token_env`) | the keys in these environment variables |
+| `profile`, `credentials_file`, `config_file` | a profile of the shared credentials and config files (default `~/.aws/credentials` and `~/.aws/config`, default profile `default`) |
+| none of them | the AWS SDK's defaults: the `AWS_*` variables, then the default profile of `~/.aws`, then the role of the EC2 instance or ECS task |
+
+- **Region:** `aws.region`, else the one of the profile or `AWS_REGION`. It
+  is required, except with `scope: CLOUDFRONT` (always `us-east-1`).
+- **Endpoint:** `aws.endpoint_url` replaces the AWS endpoint, e.g. for tests.
+- **Per action:** each action has its own `aws` settings, independent of
+  those of the sources and of the other actions.
+
+- **Undo:** to unblock an address after some time, give the blocking
+  action an [`undo`](#undoing-an-action) that runs an `aws-waf-ipset`
+  action with `operation: remove` on the same IP set, as above.
+- **Addresses:** the address is added as `192.0.2.7/32` (IPv4) or
+  `2001:db8::1/128` (IPv6). An IP set holds one IP version: an address of
+  the other one makes the action fail. A value that is not an IP address
+  fails too, and nothing is changed.
+- **Idempotent:** adding an address already in the set, or removing one that
+  is not in it, changes nothing. `remove` only removes that exact address,
+  not a range that contains it.
+- **Concurrent changes:** the IP set is read, then written with its lock
+  token. If it changed meanwhile (another action, the console), it is read
+  and written again, up to 5 times. Its description is kept.
+- **Limits:** an IP set holds at most 10,000 addresses: when it is full,
+  the action fails. AWS WAF takes from a few seconds to a minute to apply a
+  change everywhere.
+- **Protecting addresses:** as for `ssh`, give the rules that block an
+  `exclude` list of the addresses that must never be blocked.
+
+The IAM policy needs `wafv2:GetIPSet` and `wafv2:UpdateIPSet` on the IP
+set, and `wafv2:ListIPSets` if `id` is not set:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Action": ["wafv2:GetIPSet", "wafv2:UpdateIPSet"],
+     "Resource": "arn:aws:wafv2:eu-west-3:123456789012:regional/ipset/wolverine-blocklist/*"},
+    {"Effect": "Allow", "Action": "wafv2:ListIPSets", "Resource": "*"}
+  ]
+}
+```
+
 #### Undoing an action
 
 An action can last for some time only: `undo` runs other actions that long
@@ -1094,7 +1184,8 @@ internal/
   processor/enrichment/   sshd enrichment
   processor/filter/       exclude lists
   detection/              rules (threshold)
-  action/                 dispatcher, undo scheduler, email, ssh, webhook
+  action/                 dispatcher, undo scheduler, email, ssh, webhook, awswaf
+  awsconf/                AWS credentials and region (aws-s3, aws-waf-ipset)
   state/                  state file (positions, rule data, alerts, undos)
   stats/                  counters by minute
   web/                    web server: REST API, dashboard (web/ui)
