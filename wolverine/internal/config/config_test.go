@@ -110,6 +110,7 @@ func TestLoadIncludeErrors(t *testing.T) {
 		{"state_file in an included file", "", "state_file: /x\n", "only allowed in the main configuration file"},
 		{"include_dir in an included file", "", "include_dir: x\n", "only allowed in the main configuration file"},
 		{"max_lifetime in an included file", "", "max_lifetime: 1h\n", "only allowed in the main configuration file"},
+		{"http in an included file", "", "http: {listen: ':8080'}\n", "only allowed in the main configuration file"},
 		{"unknown key", "", "rulez: []\n", "10-part.yaml"},
 		{"duplicate rule across files", "rules: [{id: r}]\n", "rules: [{id: r}]\n", `rule "r" is already defined in`},
 		{"duplicate action across files", "actions: [{id: a}]\n", "actions: [{id: a}]\n", `action "a" is already defined in`},

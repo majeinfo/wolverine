@@ -15,6 +15,11 @@
 // -max-lifetime DURATION overrides the max_lifetime of the configuration:
 // how long the data memorized by the rules and the alerts raised are kept.
 //
+// -http ADDR overrides the http.listen of the configuration: the address of
+// the embedded web server (REST API and dashboard); "-http none" disables
+// it. When it runs, wolverine keeps serving after reading sources that are
+// not followed, until it is stopped.
+//
 // -v describes the configuration and what wolverine is doing on stderr;
 // -v -v (or -vv) adds debugging details.
 package main
@@ -27,10 +32,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"wolverine/internal/config"
 	"wolverine/internal/engine"
 	"wolverine/internal/verbose"
+	"wolverine/internal/web"
 )
 
 func main() {
@@ -41,6 +48,7 @@ func main() {
 	eventsPath := flag.String("events", "", "append every parsed event as a JSON line to this `file` (\"-\": stdout)")
 	detailedEvents := flag.Bool("detailed-events", false, "include in the alerts written to stdout the events (log lines) that raised them")
 	maxLifetime := flag.Duration("max-lifetime", 0, "how long the data memorized by the rules (events counted, suppressions) and the alerts raised are kept, e.g. 12h, overriding max_lifetime (default 24h)")
+	httpAddr := flag.String("http", "", "`address` of the web server (REST API and dashboard), e.g. 127.0.0.1:8080, overriding http.listen (\"none\": no web server)")
 	minimalEvents := flag.Bool("minimal-events", false, "include in the alerts written to stdout the last event (log line) that raised them")
 	flag.Parse()
 
@@ -69,6 +77,13 @@ func main() {
 	}
 	if *maxLifetime > 0 {
 		cfg.MaxLifetime = *maxLifetime
+	}
+	switch *httpAddr {
+	case "":
+	case "none":
+		cfg.HTTP.Listen = ""
+	default:
+		cfg.HTTP.Listen = *httpAddr
 	}
 	switch *statePath {
 	case "":
@@ -101,7 +116,30 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := eng.Run(ctx); err != nil {
-		log.Fatal(err)
+	var srv *web.Server
+	if cfg.HTTP.Listen != "" {
+		if srv, err = web.New(eng, cfg.HTTP); err != nil {
+			log.Fatalf("%s: %v", *configPath, err)
+		}
+		if err := srv.Start(); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	runErr := eng.Run(ctx)
+	if srv != nil {
+		if runErr == nil && ctx.Err() == nil {
+			// The sources are read: keep showing the results.
+			log.Printf("all sources read; the web server on http://%s/ keeps running until wolverine is stopped (Ctrl-C)", srv.Addr())
+			<-ctx.Done()
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("http: %v", err)
+		}
+		cancel()
+	}
+	if runErr != nil {
+		log.Fatal(runErr)
 	}
 }

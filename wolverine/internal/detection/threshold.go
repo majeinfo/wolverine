@@ -74,13 +74,20 @@ func (r *ThresholdRule) now() time.Time {
 
 func (r *ThresholdRule) ID() string { return r.RuleID }
 
+// Evaluate returns the alerts an event raises.
 func (r *ThresholdRule) Evaluate(ev *event.Event) []*event.Alert {
+	_, alerts := r.Process(ev)
+	return alerts
+}
+
+// Process counts the event if it matches and has a group_by value.
+func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 	if !r.Match.Matches(ev) {
-		return nil
+		return false, nil
 	}
 	key := FieldValue(ev, r.GroupBy)
 	if key == "" {
-		return nil
+		return false, nil
 	}
 
 	r.mu.Lock()
@@ -95,14 +102,14 @@ func (r *ThresholdRule) Evaluate(ev *event.Event) []*event.Alert {
 	verbose.Debugf("rule %s: %s=%s: %d/%d events within %s", r.RuleID, r.GroupBy, key, len(mems), r.Count, r.Window)
 	if len(mems) < r.Count {
 		r.groups[key] = mems
-		return nil
+		return true, nil
 	}
 	delete(r.groups, key)
 
 	if r.Suppress > 0 {
 		if s, ok := r.fired[key]; ok && ev.Timestamp.Sub(s.last) < r.Suppress {
 			verbose.Debugf("rule %s: %s=%s: alert suppressed until %s", r.RuleID, r.GroupBy, key, s.last.Add(r.Suppress).Format(time.DateTime))
-			return nil
+			return true, nil
 		}
 		r.fired[key] = suppression{last: ev.Timestamp, at: now}
 	}
@@ -112,7 +119,7 @@ func (r *ThresholdRule) Evaluate(ev *event.Event) []*event.Alert {
 		evs[i] = m.ev
 	}
 
-	return []*event.Alert{{
+	return true, []*event.Alert{{
 		ID:        newID(),
 		RuleID:    r.RuleID,
 		Timestamp: ev.Timestamp,

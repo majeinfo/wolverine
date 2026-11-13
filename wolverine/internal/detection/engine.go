@@ -12,11 +12,21 @@ type Engine struct {
 }
 
 func (e *Engine) Evaluate(ev *event.Event) []*event.Alert {
-	var alerts []*event.Alert
-	for _, r := range e.Rules {
-		alerts = append(alerts, r.Evaluate(ev)...)
-	}
+	_, alerts := e.Process(ev)
 	return alerts
+}
+
+// Process runs every rule against an event, and returns the ids of the rules
+// that matched it and the alerts raised.
+func (e *Engine) Process(ev *event.Event) (matched []string, alerts []*event.Alert) {
+	for _, r := range e.Rules {
+		m, a := r.Process(ev)
+		if m {
+			matched = append(matched, r.ID())
+		}
+		alerts = append(alerts, a...)
+	}
+	return matched, alerts
 }
 
 // Expire makes every rule forget the data memorized before cutoff, and

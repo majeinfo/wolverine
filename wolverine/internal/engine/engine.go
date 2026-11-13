@@ -24,6 +24,7 @@ import (
 	"wolverine/internal/processor/filter"
 	"wolverine/internal/source"
 	"wolverine/internal/state"
+	"wolverine/internal/stats"
 	"wolverine/internal/verbose"
 )
 
@@ -47,6 +48,9 @@ type Engine struct {
 	undo       *action.Scheduler
 	state      *state.Store // nil: positions are not saved
 	history    history
+	stats      *stats.Store
+	watchers   hub
+	info       Info
 
 	// MaxLifetime is how long the data memorized by the rules and the
 	// alerts raised are kept (from max_lifetime, DefaultMaxLifetime if not
@@ -124,14 +128,29 @@ func New(cfg *config.Config) (*Engine, error) {
 	}
 	describe(cfg)
 	verbose.Infof("maximum lifetime of the memorized data and alerts: %s", lifetime)
+	info := Info{MaxLifetime: lifetime.String()}
+	var sourceIDs, ruleIDs []string
+	for _, in := range inputs {
+		sourceIDs = append(sourceIDs, in.source.Name())
+		info.Sources = append(info.Sources, SourceInfo{ID: in.source.Name(), Type: in.typ})
+	}
+	for _, r := range cfg.Rules {
+		if !r.Disabled {
+			ruleIDs = append(ruleIDs, r.ID)
+			info.Rules = append(info.Rules, RuleInfo{ID: r.ID, Description: r.Description, Severity: r.Severity, Actions: append([]string{}, r.Actions...)})
+		}
+	}
 	e := &Engine{
 		inputs:      inputs,
 		processors:  []processor.Processor{enrichment.SSHD{}, exclude},
 		detector:    &detection.Engine{Rules: rules},
 		routes:      routes,
 		undo:        action.NewScheduler(undos, actions),
+		stats:       stats.New(sourceIDs, ruleIDs),
+		info:        info,
 		MaxLifetime: lifetime,
 	}
+	e.info.Started = e.stats.Started()
 	if len(undos) > 0 && cfg.StateFile == "" {
 		log.Print("warning: without a state file, the actions not undone yet when wolverine stops are never undone")
 	}
@@ -194,10 +213,42 @@ func expireInterval(lifetime time.Duration) time.Duration {
 func (e *Engine) expire(cutoff time.Time) {
 	n := e.detector.Expire(cutoff)
 	a := e.history.expire(cutoff)
+	e.stats.Expire(cutoff)
 	if n > 0 || a > 0 {
 		verbose.Debugf("expired (memorized before %s): %d rule data, %d alerts", cutoff.Format(time.DateTime), n, a)
 	}
 }
+
+// Info describes the engine: its sources and rules.
+type Info struct {
+	Started     time.Time    `json:"started"`
+	MaxLifetime string       `json:"max_lifetime"`
+	Sources     []SourceInfo `json:"sources"`
+	Rules       []RuleInfo   `json:"rules"`
+}
+
+type SourceInfo struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
+type RuleInfo struct {
+	ID          string   `json:"id"`
+	Description string   `json:"description,omitempty"`
+	Severity    string   `json:"severity,omitempty"`
+	Actions     []string `json:"actions"`
+}
+
+// Info describes the engine's sources and enabled rules.
+func (e *Engine) Info() Info { return e.info }
+
+// Stats returns the counters of what the engine processed.
+func (e *Engine) Stats() *stats.Store { return e.stats }
+
+// Watch returns a channel that receives the alerts raised from now on, and
+// a function to call when done. The channel is closed when Run returns, or
+// if the receiver lags too far behind.
+func (e *Engine) Watch() (<-chan *event.Alert, func()) { return e.watchers.subscribe() }
 
 // RecentAlerts returns the alerts raised within the maximum lifetime, oldest
 // first, with all their events.
@@ -321,6 +372,8 @@ const stateSaveInterval = 5 * time.Second
 type item struct {
 	in       *input
 	ev       *event.Event // nil for an empty line or a change of positions
+	line     bool         // a line was read (maybe empty)
+	unparsed bool         // the line did not match the regexp
 	key      string
 	position any
 	forget   []string
@@ -389,6 +442,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		if it.done != nil {
 			defer it.done()
 		}
+		if it.line {
+			e.stats.Line(it.in.source.Name(), it.ev != nil && !it.unparsed, it.unparsed)
+		}
 		if it.ev == nil {
 			return
 		}
@@ -396,6 +452,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		ev := e.process(ctx, it.ev)
 		if ev == nil {
 			it.in.excluded.Add(1) // only the exclude lists drop events
+			e.stats.Excluded(it.in.source.Name())
 			return
 		}
 		if eventEnc != nil {
@@ -403,7 +460,13 @@ func (e *Engine) Run(ctx context.Context) error {
 				log.Printf("writing event: %v", err)
 			}
 		}
-		for _, a := range e.detector.Evaluate(ev) {
+		matched, alerts := e.detector.Process(ev)
+		var alerted []string
+		for _, a := range alerts {
+			alerted = append(alerted, a.RuleID)
+		}
+		e.stats.Matched(matched, alerted)
+		for _, a := range alerts {
 			nAlerts++
 			e.history.add(a, time.Now())
 			verbose.Infof("alert %s: %s", a.RuleID, a.Message)
@@ -413,6 +476,7 @@ func (e *Engine) Run(ctx context.Context) error {
 				}
 			}
 			dispatcher.Dispatch(a)
+			e.watchers.publish(a)
 		}
 	}
 
@@ -430,6 +494,7 @@ loop:
 			handle(it)
 		}
 	}
+	e.watchers.close()
 	dispatcher.Close()
 	e.undo.Stop()
 	e.saveState()
@@ -543,10 +608,11 @@ func (e *Engine) read(ctx context.Context, in *input, events chan<- item) error 
 			continue
 		}
 		n := in.lines.Add(1)
-		it := item{in: in, key: rec.PositionKey, position: rec.Position, done: rec.Done}
+		it := item{in: in, key: rec.PositionKey, position: rec.Position, done: rec.Done, line: true}
 		if len(rec.Data) > 0 {
 			ev, err := in.parser.Parse(rec)
 			if err != nil {
+				it.unparsed = true
 				switch u := in.unparsed.Add(1); {
 				case u <= maxLoggedParseErrors || verbose.Level >= 2:
 					log.Printf("source %s: line %d: %v: %q", in.source.Name(), n, err, rec.Data)

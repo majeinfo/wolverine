@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wolverine Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='8' width='3' height='6' rx='1' fill='%232a78d6'/%3E%3Crect x='6.5' y='4' width='3' height='10' rx='1' fill='%232a78d6'/%3E%3Crect x='11' y='2' width='3' height='12' rx='1' fill='%23eb6834'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span>wolverine</div>
+  <div class="controls" role="toolbar" aria-label="Dashboard controls">
+    <label class="control">
+      <span class="control-label">Range</span>
+      <select id="range">
+        <option value="5m">Last 5 minutes</option>
+        <option value="15m">Last 15 minutes</option>
+        <option value="1h" selected>Last hour</option>
+        <option value="6h">Last 6 hours</option>
+        <option value="24h">Last 24 hours</option>
+      </select>
+    </label>
+    <label class="control">
+      <span class="control-label">Refresh</span>
+      <select id="refresh">
+        <option value="0">Off</option>
+        <option value="10">10s</option>
+        <option value="30" selected>30s</option>
+        <option value="60">1m</option>
+      </select>
+    </label>
+    <button id="reload" class="button" type="button" title="Reload now">Reload</button>
+    <button id="theme" class="button" type="button" title="Switch light / dark">Theme</button>
+    <span id="live" class="live" role="status"><span class="live-dot" aria-hidden="true"></span><span id="live-text">connecting</span></span>
+  </div>
+</header>
+
+<main id="main">
+  <p id="notice" class="notice" hidden></p>
+
+  <section class="tiles" aria-label="Totals over the range">
+    <div class="tile"><div class="tile-label">Log lines</div><div class="tile-value" id="t-lines">–</div><div class="tile-sub" id="s-lines"></div></div>
+    <div class="tile"><div class="tile-label">Events</div><div class="tile-value" id="t-events">–</div><div class="tile-sub" id="s-events"></div></div>
+    <div class="tile"><div class="tile-label">Unparsed</div><div class="tile-value" id="t-unparsed">–</div><div class="tile-sub" id="s-unparsed"></div></div>
+    <div class="tile"><div class="tile-label">Excluded</div><div class="tile-value" id="t-excluded">–</div><div class="tile-sub" id="s-excluded"></div></div>
+    <div class="tile"><div class="tile-label">Rule matches</div><div class="tile-value" id="t-matches">–</div><div class="tile-sub" id="s-matches"></div></div>
+    <div class="tile"><div class="tile-label">Alerts</div><div class="tile-value" id="t-alerts">–</div><div class="tile-sub" id="s-alerts"></div></div>
+  </section>
+
+  <section class="grid">
+    <article class="panel"><h2>Log lines</h2><p class="panel-sub" id="sub-lines"></p><div class="chart" id="c-lines"></div></article>
+    <article class="panel"><h2>Alerts by rule</h2><p class="panel-sub" id="sub-alerts"></p><div class="chart" id="c-alerts"></div></article>
+    <article class="panel"><h2>Rule matches</h2><p class="panel-sub" id="sub-matches"></p><div class="chart" id="c-matches"></div></article>
+    <article class="panel"><h2>Lines by source</h2><p class="panel-sub" id="sub-sources"></p><div class="chart" id="c-sources"></div></article>
+  </section>
+
+  <section class="grid">
+    <article class="panel">
+      <h2>Sources</h2>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Source</th><th>Type</th><th class="num">Lines</th><th class="num">Events</th><th class="num">Unparsed</th><th class="num">Excluded</th></tr></thead>
+        <tbody id="sources"></tbody>
+      </table></div>
+    </article>
+    <article class="panel">
+      <h2>Rules</h2>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Rule</th><th>Severity</th><th class="num">Matches</th><th class="num">Alerts</th></tr></thead>
+        <tbody id="rules"></tbody>
+      </table></div>
+    </article>
+  </section>
+
+  <section class="panel">
+    <h2>Alerts</h2>
+    <p class="panel-sub" id="sub-feed">Newest first; new alerts appear as they are raised. Select a row for its last log line.</p>
+    <div class="table-wrap feed-wrap"><table class="data feed">
+      <thead><tr><th>Time</th><th>Severity</th><th>Rule</th><th>Value</th><th>Message</th></tr></thead>
+      <tbody id="feed"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+<dialog id="login">
+  <form method="dialog" id="login-form">
+    <h2>Token required</h2>
+    <p>This API requires a token (http.token_env in the configuration).</p>
+    <label>Token <input id="token" type="password" autocomplete="current-password" required></label>
+    <div class="dialog-buttons"><button class="button primary" type="submit">Sign in</button></div>
+  </form>
+</dialog>
+</body>
+</html>

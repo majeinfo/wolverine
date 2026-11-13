@@ -27,6 +27,8 @@ type Config struct {
 	// (events counted, suppressions) and the alerts raised are kept, at
 	// most. Zero: DefaultMaxLifetime.
 	MaxLifetime time.Duration `yaml:"max_lifetime"`
+	// HTTP configures the embedded web server (REST API and dashboard).
+	HTTP HTTP `yaml:"http"`
 	// IncludeDir is a directory of additional configuration files, relative
 	// to the main file's directory. Absent: DefaultIncludeDir, if it exists.
 	// Empty: no include directory.
@@ -52,6 +54,16 @@ type ExcludeList struct {
 	// Entries are IP addresses, CIDR ranges, or ids of other exclude lists
 	// whose entries are added.
 	Entries []string `yaml:"entries"`
+}
+
+// HTTP configures the embedded web server.
+type HTTP struct {
+	// Listen is the address to listen on, e.g. "127.0.0.1:8080". Empty: no
+	// web server.
+	Listen string `yaml:"listen"`
+	// TokenEnv names the environment variable holding the token the API
+	// requires (Authorization: Bearer <token>). Empty: no token.
+	TokenEnv string `yaml:"token_env"`
 }
 
 // DefaultMaxLifetime is the maximum lifetime when max_lifetime is not set.
@@ -250,7 +262,8 @@ type Match struct {
 // Load reads the main configuration file, then the *.yaml and *.yml files of
 // its include directory in lexical order. The exclude lists, sources, actions
 // and rules of the included files are added to those of the main file;
-// state_file, max_lifetime and include_dir may only be set in the main file. Unknown keys
+// state_file, max_lifetime, http and include_dir may only be set in the main
+// file. Unknown keys
 // are rejected so that typos do not silently disable part of a rule.
 func Load(path string) (*Config, error) {
 	cfg, err := loadFile(path)
@@ -283,8 +296,8 @@ func Load(path string) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		if part.StateFile != "" || part.MaxLifetime != 0 || part.IncludeDir != nil {
-			return nil, fmt.Errorf("%s: state_file, max_lifetime and include_dir are only allowed in the main configuration file %s", f, path)
+		if part.StateFile != "" || part.MaxLifetime != 0 || part.HTTP != (HTTP{}) || part.IncludeDir != nil {
+			return nil, fmt.Errorf("%s: state_file, max_lifetime, http and include_dir are only allowed in the main configuration file %s", f, path)
 		}
 		if err := ids.add(part, f); err != nil {
 			return nil, err

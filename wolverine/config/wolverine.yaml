@@ -42,11 +42,20 @@ state_file: /var/lib/wolverine/state.json
 # -max-lifetime option overrides it.
 max_lifetime: 24h
 
+# Embedded web server: REST API (statistics, alerts, real-time watch) and a
+# dashboard, here on http://127.0.0.1:8080/. Off without listen. With
+# token_env, the API requires "Authorization: Bearer <token>", the value of
+# that environment variable. The -http option overrides listen.
+# http:
+#   listen: 127.0.0.1:8080
+#   token_env: WOLVERINE_HTTP_TOKEN
+
 # Directory of additional configuration files, relative to the directory of
 # this file. Every *.yaml and *.yml file in it is read, in lexical order
 # (10-ssh.yaml before 20-web.yaml), and its exclude lists, sources, actions
 # and rules are added to those of this file. Hidden files and subdirectories are
-# ignored; state_file, max_lifetime and include_dir can only be set here.
+# ignored; state_file, max_lifetime, http and include_dir can only be set
+# here.
 # Without this setting, rules.d is used if it exists; "" disables it.
 include_dir: rules.d
 

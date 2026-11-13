@@ -21,6 +21,7 @@ import (
 	"wolverine/internal/event"
 	"wolverine/internal/source/syslog"
 	"wolverine/internal/state"
+	"wolverine/internal/stats"
 )
 
 // The shipped configuration, with its source pointed at a test file, must
@@ -819,5 +820,58 @@ func TestRunUndo(t *testing.T) {
 	run()
 	if got := called(); got != "/unblock (undo of block)" || len(savedUndos()) != 0 {
 		t.Fatalf("third run: %q, %+v", got, savedUndos())
+	}
+}
+
+func TestRunStatsAndWatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secure")
+	os.WriteFile(path, []byte("Failed password for root from 192.0.2.1\n"+
+		"garbage\n"+
+		"Failed password for root from 10.0.0.1\n"+ // excluded
+		"\n"+ // empty: a line, but not an event
+		strings.Repeat("Failed password for root from 192.0.2.1\n", 2)), 0o644)
+	src := logfile(path)
+	src.ID = "ssh"
+	src.Regexp = `^Failed password for (?P<username>\S+) from (?P<source_ip>\S+)$`
+	src.Exclude = []string{"lan"}
+	cfg := &config.Config{
+		ExcludeLists: []config.ExcludeList{{ID: "lan", Entries: []string{"10.0.0.0/8"}}},
+		Sources:      []config.Source{src},
+		Rules: []config.Rule{
+			{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour},
+			{ID: "idle", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour, Match: config.Match{Category: "none"}},
+		},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := eng.Info()
+	if len(info.Sources) != 1 || info.Sources[0].Type != "logfile" || len(info.Rules) != 2 {
+		t.Errorf("info: %+v", info)
+	}
+	alerts, cancel := eng.Watch()
+	defer cancel()
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a, ok := <-alerts
+	if !ok || a.RuleID != "r" {
+		t.Fatalf("watched: %+v %v", a, ok)
+	}
+	if _, ok := <-alerts; ok {
+		t.Error("the channel should be closed when Run returns")
+	}
+	tot := eng.Stats().Total()
+	if tot.Totals != (stats.Totals{Source: stats.Source{Lines: 6, Events: 4, Unparsed: 1, Excluded: 1}, Rule: stats.Rule{Matches: 3, Alerts: 1}}) {
+		t.Errorf("totals: %+v", tot.Totals)
+	}
+	if *tot.Rules["idle"] != (stats.Rule{}) || tot.Rules["r"].Matches != 3 {
+		t.Errorf("rules: %+v %+v", tot.Rules["idle"], tot.Rules["r"])
+	}
+	// A watcher after the end gets a closed channel.
+	if ch, _ := eng.Watch(); func() bool { _, ok := <-ch; return ok }() {
+		t.Error("watch after Run")
 	}
 }

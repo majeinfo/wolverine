@@ -12,7 +12,9 @@ import (
 // Implementations must be safe for concurrent use.
 type Rule interface {
 	ID() string
-	Evaluate(ev *event.Event) []*event.Alert
+	// Process tells whether the rule matched (counted) the event, and
+	// returns the alerts it raised.
+	Process(ev *event.Event) (matched bool, alerts []*event.Alert)
 	// Expire forgets the data memorized before cutoff (wall clock), so no
 	// data outlives the maximum lifetime, and returns how many items were
 	// forgotten.

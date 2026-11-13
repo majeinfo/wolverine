@@ -27,6 +27,7 @@ within 5 minutes.
   - [`exclude_if` conditions](#exclude_if-conditions)
   - [State file](#state-file)
   - [Maximum lifetime](#maximum-lifetime)
+- [Web server, API and dashboard](#web-server-api-and-dashboard)
 - [Install as a service](#install-as-a-service)
 - [Project layout](#project-layout)
 
@@ -64,6 +65,7 @@ bin/wolverine -config config/wolverine.yaml
 |---|---|
 | `-config FILE` | configuration file (default `config/wolverine.yaml`) |
 | `-state FILE` | state file where the position of each source is saved; overrides `state_file` from the configuration. `-state none` disables it |
+| `-http ADDRESS` | run the [web server](#web-server-api-and-dashboard) (REST API and dashboard) on ADDRESS, e.g. `127.0.0.1:8080`; overrides `http.listen`. `-http none` disables it |
 | `-max-lifetime DURATION` | how long the data memorized by the rules and the alerts raised are kept, e.g. `12h`; overrides `max_lifetime` (default `24h`). See [maximum lifetime](#maximum-lifetime) |
 | `-events FILE` | append every event, after parsing and enrichment, as a JSON line to FILE (`-` for stdout) |
 | `-detailed-events` | include in the alerts written to stdout the events (log lines) that raised them |
@@ -108,6 +110,7 @@ The configuration is a main YAML file with these sections:
 exclude_lists: [...]     # named lists of IPs that rules can ignore
 state_file:    ...       # where the position of each source is saved
 max_lifetime:  24h       # how long rule data and alerts are kept in memory
+http:          {...}     # embedded web server: REST API and dashboard
 include_dir:   rules.d   # directory of additional configuration files
 sources:       [...]     # where events come from
 actions:       [...]     # what to do when an alert fires
@@ -139,8 +142,8 @@ of the file names. Prefix the names with numbers to choose the order:
   exclude list defined in another file, and a list can include a list of
   another file.
 - **Unique ids:** an id used twice is an error that names both files.
-- **Main file only:** `state_file`, `max_lifetime` and `include_dir` can
-  only be set in the main file.
+- **Main file only:** `state_file`, `max_lifetime`, `http` and
+  `include_dir` can only be set in the main file.
 - **Location:** `include_dir` is relative to the main file's directory, or
   absolute.
   - Without `include_dir`, `rules.d` next to the main file is read if it
@@ -868,6 +871,135 @@ flushed suppression no longer silences its group.
 
 `-v -v` logs what is flushed.
 
+## Web server, API and dashboard
+
+```yaml
+http:
+  listen: 127.0.0.1:8080
+  token_env: WOLVERINE_HTTP_TOKEN   # optional
+```
+
+With `http.listen` (or `-http 127.0.0.1:8080`), wolverine serves a REST API
+and a dashboard at `http://127.0.0.1:8080/`. Without it, there is no web
+server.
+
+- **Token:** with `token_env`, the API requires
+  `Authorization: Bearer <token>`, the value of that environment variable.
+  The dashboard asks for it and keeps it in the browser. Without a token,
+  anyone who can reach the port sees the alerts and the log lines in them:
+  wolverine warns when it listens on another address than localhost without
+  a token.
+- **HTTPS:** wolverine serves plain HTTP. To expose it, put it behind a
+  reverse proxy that handles TLS (nginx, Caddy...).
+- **Sources read once:** when all sources have been read (`follow: false`),
+  wolverine keeps serving until it is stopped (Ctrl-C), so the results of a
+  replayed log can be explored.
+
+### Counters
+
+Wolverine counts, per source and per rule:
+
+| Counter | Meaning |
+|---|---|
+| `lines` | lines (or journal entries, S3 lines) read, empty ones included |
+| `events` | lines the source's regexp parsed |
+| `unparsed` | lines the regexp did not parse (still processed, with their raw text) |
+| `excluded` | events dropped by the source's `exclude` or `exclude_if` |
+| `matches` | events a rule matched: counted toward its threshold |
+| `alerts` | alerts a rule raised |
+
+- **Time:** counters are kept by minute of processing (the clock), not by
+  the timestamp of the log lines. A replayed old log is counted when it is
+  read.
+- **Retention:** the minutes older than `max_lifetime` are dropped. The
+  totals since the start are kept apart. Counters are not saved in the state
+  file: they restart from zero with wolverine.
+
+### REST API
+
+Every endpoint is a `GET` and returns JSON. Times are given as RFC 3339
+(`2026-11-13T10:00:00Z`), Unix seconds, `now`, or relative to now (`-15m`,
+`now-1h`). Errors are `{"error": "..."}` with a 4xx status.
+
+| Endpoint | Returns |
+|---|---|
+| `/api/v1/info` | the sources and enabled rules, the start time, `max_lifetime` |
+| `/api/v1/stats` | totals since the start |
+| `/api/v1/stats?from=-1h&to=now` | totals of an interval (`to` defaults to now) |
+| `/api/v1/stats/series?from=-6h&step=5m` | counters by time bucket |
+| `/api/v1/alerts?from=-1h&rule=ssh-failed-logins-per-ip&limit=50` | alerts, newest first |
+| `/api/v1/alerts/watch` | new alerts, in real time (server-sent events) |
+| `/healthz` | `ok` (no token needed) |
+
+**`/stats`** gives `totals`, `sources` (by id) and `rules` (by id).
+
+- An interval counts the minutes that start in `[from, to)`: `from` is
+  rounded down to the minute.
+- `available_since` is the start of the oldest minute kept. An interval that
+  starts before it only has partial counts.
+
+```console
+$ curl -s 'localhost:8080/api/v1/stats?from=-1h'
+{"from":"…","to":"…","since_start":false,"available_since":"…",
+ "totals":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"matches":341,"alerts":4},
+ "sources":{"ssh":{"lines":5120,"events":5087,"unparsed":33,"excluded":12}},
+ "rules":{"ssh-failed-logins-per-ip":{"matches":341,"alerts":4}}}
+```
+
+**`/stats/series`** gives `buckets`: one per `step`, each with its `start`
+and the same `totals`, `sources` and `rules`.
+
+- Empty buckets are included.
+- `from` defaults to `-1h`. `from` is rounded down to the step.
+- `step` is a multiple of a minute, e.g. `1m` or `1h`. By default it gives
+  about 120 buckets. A series has at most 2000 buckets.
+
+**`/alerts`** gives the alerts kept within `max_lifetime`, newest first:
+`{"total": N, "alerts": [...]}`.
+
+| Parameter | Meaning |
+|---|---|
+| `from`, `to` | on the alert's timestamp |
+| `rule`, `severity` | only those; several values separated by commas |
+| `limit` | at most that many alerts (default 100, at most 10000); `total` counts them all |
+| `events` | `last` (default): the last event of each alert; `all`; `none` |
+
+**`/alerts/watch`** streams the alerts as they are raised, as
+[server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html).
+It takes the `rule`, `severity` and `events` parameters of `/alerts`.
+
+```console
+$ curl -sN -H "Authorization: Bearer $TOKEN" 'localhost:8080/api/v1/alerts/watch?events=none'
+retry: 3000
+: connected
+
+event: alert
+id: 5b4c5279956def3f29b4c65a1c45e559
+data: {"ID":"5b4c…","RuleID":"ssh-failed-logins-per-ip","Severity":"high","Message":"…","Metadata":{…}}
+```
+
+- **Heartbeat:** a `: heartbeat` comment comes every 15 seconds, so proxies
+  keep the connection open.
+- **End of stream:** the stream ends when wolverine stops, or if the client
+  reads too slowly. Reconnect, and fetch `/alerts` for what was missed.
+- **Limit:** at most 64 clients are served at once.
+
+### Dashboard
+
+The dashboard at `/` shows, for the range selected (5 minutes to 24
+hours), refreshed every 10 s to 1 min:
+
+- **Stat panels:** the six counters over the range and since the start.
+- **Charts:** log lines (parsed and unparsed), alerts by rule, rule matches,
+  and lines by source. Hover a chart, or focus it and use the arrow keys,
+  for the values.
+- **Tables:** the counters of each source and rule.
+- **Alerts:** the alerts of the range, then the new ones as they are raised.
+  Select one for its last log line.
+
+It follows the system's light or dark mode; the Theme button switches it.
+The dashboard is built into the binary and loads nothing from the Internet.
+
 ## Install as a service
 
 ```bash
@@ -964,5 +1096,7 @@ internal/
   detection/              rules (threshold)
   action/                 dispatcher, undo scheduler, email, ssh, webhook
   state/                  state file (positions, rule data, alerts, undos)
+  stats/                  counters by minute
+  web/                    web server: REST API, dashboard (web/ui)
   verbose/                -v / -v -v logging
 ```
