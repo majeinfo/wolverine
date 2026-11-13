@@ -61,7 +61,7 @@ func TestRunShippedConfig(t *testing.T) {
 	}
 	var out, events bytes.Buffer
 	eng.Alerts = &out
-	eng.AlertEvents = true // -detailed-events
+	eng.AlertEvents = AllAlertEvents // -detailed-events
 	eng.Events = &events
 	if err := eng.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -507,5 +507,26 @@ func TestRunDirectory(t *testing.T) {
 	}
 	if n, _ := run(); n != 0 {
 		t.Fatalf("third run: %d lines, want 0", n)
+	}
+}
+
+func TestAlertEvents(t *testing.T) {
+	a := &event.Alert{RuleID: "r", Events: []*event.Event{{Raw: "one"}, {Raw: "two"}, {Raw: "three"}}}
+	for mode, want := range map[AlertEvents]string{
+		NoAlertEvents:  "",
+		LastAlertEvent: "three",
+		AllAlertEvents: "one,two,three",
+	} {
+		var raws []string
+		for _, ev := range mode.apply(a).Events {
+			raws = append(raws, ev.Raw)
+		}
+		if got := strings.Join(raws, ","); got != want {
+			t.Errorf("mode %d: events %q, want %q", mode, got, want)
+		}
+	}
+	// The alert given to the actions is not modified.
+	if len(a.Events) != 3 {
+		t.Errorf("alert modified: %d events", len(a.Events))
 	}
 }

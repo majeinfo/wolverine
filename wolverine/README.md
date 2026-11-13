@@ -64,12 +64,13 @@ bin/wolverine -config config/wolverine.yaml
 | `-state FILE` | state file where the position of each source is saved; overrides `state_file` from the configuration. `-state none` disables it |
 | `-events FILE` | append every event, after parsing and enrichment, as a JSON line to FILE (`-` for stdout) |
 | `-detailed-events` | include in the alerts written to stdout the events (log lines) that raised them |
+| `-minimal-events` | include in the alerts written to stdout only the last event, the one that raised them |
 | `-v` | describe the configuration and what wolverine does (alerts, actions run, log rotations...) |
 | `-v -v` or `-vv` | debugging details: rule counters per IP, every unparsed line, each action started... |
 
 - **stdout** receives the alerts, one JSON object per line. They do not
-  include the log lines that raised them unless `-detailed-events` is
-  given.
+  include the log lines that raised them, unless `-minimal-events` (the
+  last one) or `-detailed-events` (all of them) is given.
 - **stderr** receives the logs: errors, the summary at exit and the `-v`
   messages.
 
@@ -499,7 +500,9 @@ Alerts are written to stdout as JSON:
 ```
 
 With `-detailed-events`, they also have an `Events` array: the events that
-raised the alert, with their log lines (`Raw`) and fields. The actions
+raised the alert, with their log lines (`Raw`) and fields. With
+`-minimal-events`, the array only holds the last event, the one that made
+the count reach the threshold. The two options cannot be used together. The actions
 always get the events: emails and webhooks include up to `max_events` log
 lines.
 

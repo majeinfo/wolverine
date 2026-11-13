@@ -37,10 +37,21 @@ func main() {
 	statePath := flag.String("state", "", "state `file` where the position of each source is saved, overriding state_file (\"none\": do not save positions)")
 	eventsPath := flag.String("events", "", "append every parsed event as a JSON line to this `file` (\"-\": stdout)")
 	detailedEvents := flag.Bool("detailed-events", false, "include in the alerts written to stdout the events (log lines) that raised them")
+	minimalEvents := flag.Bool("minimal-events", false, "include in the alerts written to stdout the last event (log line) that raised them")
 	flag.Parse()
 
 	log.SetFlags(0)
 	log.SetPrefix("wolverine: ")
+
+	alertEvents := engine.NoAlertEvents
+	switch {
+	case *detailedEvents && *minimalEvents:
+		log.Fatal("-detailed-events and -minimal-events cannot be used together")
+	case *detailedEvents:
+		alertEvents = engine.AllAlertEvents
+	case *minimalEvents:
+		alertEvents = engine.LastAlertEvent
+	}
 
 	if abs, err := filepath.Abs(*configPath); err == nil {
 		verbose.Infof("configuration file: %s", abs)
@@ -61,7 +72,7 @@ func main() {
 		log.Fatalf("%s: %v", *configPath, err)
 	}
 	eng.Alerts = os.Stdout
-	eng.AlertEvents = *detailedEvents
+	eng.AlertEvents = alertEvents
 	switch *eventsPath {
 	case "":
 	case "-":

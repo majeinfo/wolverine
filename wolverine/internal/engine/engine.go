@@ -48,12 +48,38 @@ type Engine struct {
 
 	// Alerts receives every alert as a JSON line (nil: not written).
 	Alerts io.Writer
-	// AlertEvents includes in the alerts written to Alerts the events that
-	// raised them. Actions always get them.
-	AlertEvents bool
+	// AlertEvents tells which of the events that raised an alert are
+	// included in the alerts written to Alerts. Actions always get them all.
+	AlertEvents AlertEvents
 	// Events receives every event as a JSON line, after the processors and
 	// before the detection rules (nil: not written).
 	Events io.Writer
+}
+
+// AlertEvents tells which events an alert written to Engine.Alerts includes.
+type AlertEvents int
+
+const (
+	// NoAlertEvents leaves the events out: the count is in Metadata.
+	NoAlertEvents AlertEvents = iota
+	// LastAlertEvent includes the last event, the one that raised the
+	// alert.
+	LastAlertEvent
+	// AllAlertEvents includes every event.
+	AllAlertEvents
+)
+
+// apply returns the alert as written: a copy when events are left out.
+func (m AlertEvents) apply(a *event.Alert) *event.Alert {
+	if m == AllAlertEvents || len(a.Events) == 0 {
+		return a
+	}
+	short := *a
+	short.Events = nil
+	if m == LastAlertEvent {
+		short.Events = a.Events[len(a.Events)-1:]
+	}
+	return &short
 }
 
 // New builds the engine described by the configuration.
@@ -273,13 +299,7 @@ func (e *Engine) Run(ctx context.Context) error {
 			nAlerts++
 			verbose.Infof("alert %s: %s", a.RuleID, a.Message)
 			if alertEnc != nil {
-				out := a
-				if !e.AlertEvents {
-					short := *a
-					short.Events = nil // the count is in Metadata
-					out = &short
-				}
-				if err := alertEnc.Encode(out); err != nil {
+				if err := alertEnc.Encode(e.AlertEvents.apply(a)); err != nil {
 					log.Printf("writing alert: %v", err)
 				}
 			}

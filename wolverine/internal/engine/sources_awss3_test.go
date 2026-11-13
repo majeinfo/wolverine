@@ -147,7 +147,7 @@ func TestRunAWSS3(t *testing.T) {
 	}
 	var out bytes.Buffer
 	eng.Alerts = &out
-	eng.AlertEvents = true
+	eng.AlertEvents = AllAlertEvents
 	if err := eng.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
