@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"wolverine/internal/event"
 )
 
 func TestRoundTrip(t *testing.T) {
@@ -91,5 +94,32 @@ func TestInvalid(t *testing.T) {
 	os.WriteFile(path, []byte(`{"version": 99}`), 0o600)
 	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAlerts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s.SetAlerts([]Alert{{MemorizedAt: at, Alert: &event.Alert{ID: "a1", RuleID: "r",
+		Events: []*event.Event{{Raw: "line", SourceIP: "192.0.2.1"}}}}})
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.Alerts()
+	if len(got) != 1 || !got[0].MemorizedAt.Equal(at) || got[0].Alert.RuleID != "r" || got[0].Alert.Events[0].Raw != "line" {
+		t.Fatalf("alerts read back: %+v", got)
+	}
+
+	os.WriteFile(path, []byte(`{"version": 2, "sources": {}, "alerts": [{"memorized_at": "2026-11-13T10:00:00Z"}]}`), 0o600)
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "alert #1: no data") {
+		t.Errorf("alert without data: %v", err)
 	}
 }

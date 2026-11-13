@@ -1,5 +1,6 @@
 // Package state keeps, in a JSON file, the position of each source, so that
-// a restart resumes after the last record processed.
+// a restart resumes after the last record processed, and the alerts raised
+// within the maximum lifetime.
 package state
 
 import (
@@ -11,6 +12,9 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"time"
+
+	"wolverine/internal/event"
 )
 
 // version 2 has several positions per source (one per log file); version 1
@@ -20,6 +24,14 @@ const version = 2
 type file struct {
 	Version int                `json:"version"`
 	Sources map[string]*Source `json:"sources"`
+	Alerts  []Alert            `json:"alerts,omitempty"`
+}
+
+// Alert is an alert memorized by the engine, with the wall-clock time it
+// was memorized: it expires at that time plus the maximum lifetime.
+type Alert struct {
+	MemorizedAt time.Time    `json:"memorized_at"`
+	Alert       *event.Alert `json:"alert"`
 }
 
 // Source is the saved positions of one source, by key.
@@ -35,6 +47,7 @@ type Source struct {
 type Store struct {
 	path    string
 	sources map[string]*Source
+	alerts  []Alert
 	dirty   bool
 }
 
@@ -57,6 +70,12 @@ func Open(path string) (*Store, error) {
 	if f.Version != 1 && f.Version != version {
 		return nil, fmt.Errorf("state file %s: unsupported version %d", path, f.Version)
 	}
+	for i, a := range f.Alerts {
+		if a.Alert == nil {
+			return nil, fmt.Errorf("state file %s: alert #%d: no data", path, i+1)
+		}
+	}
+	s.alerts = f.Alerts
 	for id, src := range f.Sources {
 		if src == nil {
 			return nil, fmt.Errorf("state file %s: source %q: no data", path, id)
@@ -187,13 +206,22 @@ func (s *Store) Retain(ids []string) {
 	}
 }
 
+// Alerts returns the saved alerts.
+func (s *Store) Alerts() []Alert { return s.alerts }
+
+// SetAlerts replaces the saved alerts.
+func (s *Store) SetAlerts(alerts []Alert) {
+	s.alerts = alerts
+	s.dirty = true
+}
+
 // Save writes the file if something changed. It is replaced atomically, so
 // a crash never leaves it half written. The directory is created if needed.
 func (s *Store) Save() error {
 	if !s.dirty {
 		return nil
 	}
-	b, err := json.MarshalIndent(file{Version: version, Sources: s.sources}, "", "  ")
+	b, err := json.MarshalIndent(file{Version: version, Sources: s.sources, Alerts: s.alerts}, "", "  ")
 	if err != nil {
 		return err
 	}

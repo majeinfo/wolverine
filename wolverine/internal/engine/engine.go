@@ -140,6 +140,10 @@ func New(cfg *config.Config) (*Engine, error) {
 		if err := e.resume(); err != nil {
 			return nil, err
 		}
+		if saved := e.state.Alerts(); len(saved) > 0 {
+			n := e.history.restore(saved, time.Now().Add(-lifetime))
+			verbose.Infof("state file: %d alerts restored, %d expired", n, len(saved)-n)
+		}
 	}
 	return e, nil
 }
@@ -421,6 +425,9 @@ func (e *Engine) setPosition(it item) {
 func (e *Engine) saveState() {
 	if e.state == nil {
 		return
+	}
+	if alerts, changed := e.history.saved(); changed {
+		e.state.SetAlerts(alerts)
 	}
 	if err := e.state.Save(); err != nil {
 		log.Print(err)

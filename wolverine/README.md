@@ -765,6 +765,11 @@ restart resumes after the last line or entry processed:
     `start_at` only applies to the first run of a source.
 - **Journal sources** resume after the cursor of the last entry processed.
 
+The state file also holds the alerts raised within the
+[maximum lifetime](#maximum-lifetime), with their events, so that a restart
+gets them back. Those memorized longer ago are dropped at startup and the
+next save.
+
 When positions are saved:
 
 - A position is recorded only once its event has been processed.
@@ -803,7 +808,10 @@ flushed suppression no longer silences its group.
   adds a limit on the clock: an event leaves the window when it is too old
   for it, or when it has been memorized for `max_lifetime`, whichever comes
   first.
-- **Not saved:** this data is lost when wolverine stops.
+- **Restart:** the alerts are saved in the [state file](#state-file), if
+  there is one, and restored at startup with the time they were memorized,
+  so their lifetime spans restarts. The rule data (events counted,
+  suppressions) is not saved: it is lost when wolverine stops.
 
 `-v -v` logs what is flushed.
 

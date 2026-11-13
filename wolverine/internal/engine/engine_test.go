@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -620,5 +621,60 @@ func TestExpireInterval(t *testing.T) {
 		if got := expireInterval(lifetime); got != want {
 			t.Errorf("%s: %s, want %s", lifetime, got, want)
 		}
+	}
+}
+
+func TestRunSavesAlerts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secure")
+	os.WriteFile(path, []byte(strings.Repeat("Failed password for root from 192.0.2.1\n", 3)), 0o644)
+	src := logfile(path)
+	src.Regexp = `^Failed password for (?P<username>\S+) from (?P<source_ip>\S+)$`
+	cfg := &config.Config{
+		StateFile: filepath.Join(dir, "state.json"),
+		Sources:   []config.Source{src},
+		Rules:     []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour}},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(eng.RecentAlerts()) != 1 {
+		t.Fatalf("%d alerts", len(eng.RecentAlerts()))
+	}
+
+	// A restart gets the alert back, with its events, though no line is
+	// read again.
+	eng, err = New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alerts := eng.RecentAlerts()
+	if len(alerts) != 1 || alerts[0].RuleID != "r" || len(alerts[0].Events) != 3 || alerts[0].Events[2].SourceIP != "192.0.2.1" {
+		t.Fatalf("restored alerts: %+v", alerts)
+	}
+
+	// An alert memorized before the lifetime is not restored, and is
+	// removed from the file at the next save.
+	cfg.MaxLifetime = time.Hour
+	b, _ := os.ReadFile(cfg.StateFile)
+	old := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	b = regexp.MustCompile(`"memorized_at": "[^"]*"`).ReplaceAll(b, []byte(`"memorized_at": "`+old+`"`))
+	os.WriteFile(cfg.StateFile, b, 0o600)
+	eng, err = New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(eng.RecentAlerts()); n != 0 {
+		t.Fatalf("%d expired alerts restored", n)
+	}
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(cfg.StateFile); strings.Contains(string(b), `"alerts"`) {
+		t.Errorf("expired alert still saved:\n%s", b)
 	}
 }
