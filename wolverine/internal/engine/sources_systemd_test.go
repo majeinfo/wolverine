@@ -51,6 +51,7 @@ func TestBuildSystemdServiceErrors(t *testing.T) {
 		{"path", func(c *config.Source) { c.Path = "/var/log/messages" }, "path, directory and filename_regexp do not apply"},
 		{"timestamp_formats", func(c *config.Source) { c.TimestampFormats = []string{"rfc3164"} }, "timestamp_formats does not apply"},
 		{"timezone", func(c *config.Source) { c.Timezone = "UTC" }, "timezone does not apply"},
+		{"skip_lines", func(c *config.Source) { c.SkipLines = 1 }, "skip_lines does not apply"},
 		{"end without follow", func(c *config.Source) { c.StartAt = "end" }, "requires follow"},
 		{"bad regexp", func(c *config.Source) { c.Regexp = "(" }, "regexp:"},
 	}

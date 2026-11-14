@@ -210,6 +210,29 @@ field. The first 10 are logged; with `-v -v`, all of them are.
 
 Every event gets the name of the file it comes from in `Fields.file`.
 
+**`skip_lines`** ignores that many lines at the beginning of each file, for
+files that start with a header, such as the column names of a CSV file or
+the `#Version` and `#Fields` lines of a W3C log:
+
+```yaml
+- id: access-csv
+  type: logfile
+  path: /var/log/app/access.csv
+  skip_lines: 1             # the line "date,ip,user,status"
+  regexp: '^(?P<timestamp>[^,]+),(?P<source_ip>[^,]+),(?P<username>[^,]*),(?P<status>\d+)$'
+```
+
+- **Each file:** with `directory`, every file has its header skipped,
+  compressed ones too.
+- **Wherever the reading starts:** after a restart, the lines are counted
+  from the beginning of the file, so the header is skipped even when the
+  saved position is in it, and no line after it is skipped. Likewise with
+  `start_at: end`.
+- **Truncated file:** a file truncated and rewritten (copytruncate) has its
+  new header skipped.
+- **Not counted:** the skipped lines are neither events nor unparsed lines
+  in the counters. With `-v -v`, each is logged.
+
 Instead of `path`, a source can read every file of a directory whose name
 matches a regexp, for example the logs of all the virtual hosts of a web
 server:
@@ -327,7 +350,8 @@ wolverine:
 1. downloads the object;
 2. decompresses it if it is gzip or bzip2, recognized by its content;
 3. parses its lines with `regexp`, like a `logfile` source (`timestamp_formats`,
-   `timezone` and `category` too). `Fields.file` is `s3://bucket/key`;
+   `timezone`, `category` and `skip_lines` too, the latter for each object).
+   `Fields.file` is `s3://bucket/key`;
 4. deletes the message once every line has gone through the rules.
 
 **Setting up AWS:**

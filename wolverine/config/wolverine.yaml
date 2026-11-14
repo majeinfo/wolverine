@@ -76,6 +76,7 @@ sources:
     filename_regexp: '^messages|secure$'
     follow: true          # true: keep reading new lines (tail -F)
     start_at: beginning    # or end (only new lines, requires follow)
+    # skip_lines: 1        # lines ignored at the beginning of each file (header)
     # Traditional syslog ("Nov  8 10:12:01 host sshd[123]: msg") and
     # RFC 3339 timestamps ("2026-11-08T10:12:01.123456+01:00 host ...").
     regexp: '^(?:<(?P<pri>\d{1,3})>)?(?P<timestamp>[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\S+) (?P<hostname>\S+) (?:(?P<service>[^\s\[:]+)(?:\[(?P<pid>\d+)\])?: ?)?(?P<message>.*)$'
@@ -146,6 +147,7 @@ sources:
   #   type: aws-s3
   #   queue_url: https://sqs.eu-west-3.amazonaws.com/123456789012/alb-logs
   #   key_regexp: '\.log\.gz$'     # optional: only these objects
+  #   skip_lines: 0                 # lines ignored at the beginning of each object (header)
   #   follow: true
   #   visibility_timeout: 5m        # extended while a file is read
   #   aws:

@@ -54,6 +54,7 @@ func buildAWSS3(c config.Source) (*input, error) {
 			KeyRegexp:         keyRe,
 			Follow:            c.Follow,
 			VisibilityTimeout: c.VisibilityTimeout,
+			SkipLines:         c.SkipLines,
 			SQS:               clients.SQS,
 			S3:                clients.S3,
 		},

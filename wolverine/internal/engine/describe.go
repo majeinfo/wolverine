@@ -54,7 +54,11 @@ func describe(cfg *config.Config) {
 		if s.Type == "systemd-service" {
 			target = "unit " + systemdUnitName(s.Unit)
 		}
-		verbose.Infof("source %s: %s %s (follow: %v, start at %s)", s.ID, s.Type, target, s.Follow, startAt)
+		skip := ""
+		if s.SkipLines > 0 {
+			skip = fmt.Sprintf(", skip the first %d lines of each %s", s.SkipLines, map[bool]string{false: "file", true: "object"}[s.Type == "aws-s3"])
+		}
+		verbose.Infof("source %s: %s %s (follow: %v, start at %s%s)", s.ID, s.Type, target, s.Follow, startAt, skip)
 		if s.Regexp != "" {
 			verbose.Infof("source %s: regexp groups: %s", s.ID, strings.Join(regexpGroups(s.Regexp), ", "))
 			verbose.Debugf("source %s: regexp: %s", s.ID, s.Regexp)

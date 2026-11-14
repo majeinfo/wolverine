@@ -184,6 +184,22 @@ func TestDeletedOnlyWhenDone(t *testing.T) {
 	check(t, q.deleted, "rh-m1")
 }
 
+// The first lines of every object are skipped (a header), gzipped ones
+// included.
+func TestSkipLines(t *testing.T) {
+	q := &fakeSQS{}
+	q.add("m1", s3Event("logs", "a.log.gz", "short.log"))
+	q.add("m2", s3Event("logs", "b.log"))
+	objects := fakeS3{
+		"logs/a.log.gz":  gz("#Version: 1.0\n#Fields: date time\na1\na2\n"),
+		"logs/short.log": []byte("#Version: 1.0\n"),
+		"logs/b.log":     []byte("#Version: 1.0\n#Fields: date time\nb1"),
+	}
+	s := &Source{ID: "s3", SQS: q, S3: objects, SkipLines: 2}
+	check(t, read(t, s), "s3://logs/a.log.gz: a1", "s3://logs/a.log.gz: a2", "done", "s3://logs/b.log: b1", "done")
+	check(t, q.deleted, "rh-m1", "rh-m2")
+}
+
 func TestKeyRegexp(t *testing.T) {
 	q := &fakeSQS{}
 	q.add("m1", s3Event("logs", "a.log", "a.json"))

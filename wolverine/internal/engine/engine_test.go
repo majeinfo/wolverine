@@ -390,6 +390,7 @@ func TestBuildSourcesErrors(t *testing.T) {
 		{"bad macro", func(c *config.Source) { c.Path = "/var/log/app.${week}" }, `path: macro ${week}: unknown variable "week"`},
 		{"unclosed macro", func(c *config.Source) { c.Path = "/var/log/app.${day" }, "unclosed macro"},
 		{"bad start_at", func(c *config.Source) { c.StartAt = "middle" }, "start_at"},
+		{"negative skip_lines", func(c *config.Source) { c.SkipLines = -1 }, "skip_lines: -1"},
 		{"end without follow", func(c *config.Source) { c.StartAt = "end" }, "requires follow"},
 		{"all disabled", func(c *config.Source) { c.Disabled = true }, "no source enabled"},
 	}
@@ -913,5 +914,30 @@ func TestRunStatsAndWatch(t *testing.T) {
 	// A watcher after the end gets a closed channel.
 	if ch, _ := eng.Watch(); func() bool { _, ok := <-ch; return ok }() {
 		t.Error("watch after Run")
+	}
+}
+
+// The header lines given by skip_lines are not parsed: neither events nor
+// unparsed lines.
+func TestRunSkipLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "access.csv")
+	os.WriteFile(path, []byte("ip,user\n192.0.2.1,root\n192.0.2.1,admin\n"), 0o644)
+	src := logfile(path)
+	src.Regexp = `^(?P<source_ip>[\d.]+),(?P<username>\w+)$`
+	src.SkipLines = 1
+	cfg := &config.Config{
+		Sources: []config.Source{src},
+		Rules:   []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 2, Window: time.Hour}},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tot := eng.Stats().Total().Totals; tot.Lines != 2 || tot.Events != 2 || tot.Unparsed != 0 || tot.Alerts != 1 {
+		t.Errorf("totals: %+v", tot)
 	}
 }

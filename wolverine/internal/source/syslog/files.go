@@ -76,7 +76,11 @@ type Files struct {
 	// StartAtEnd only applies to the files present when the source is
 	// first opened without saved positions.
 	StartAtEnd bool
-	Poll       time.Duration
+	// SkipLines is the number of lines ignored at the beginning of each
+	// file (a header), wherever the reading starts: after a restart, or
+	// once the file is truncated.
+	SkipLines int
+	Poll      time.Duration
 
 	files   []*file
 	current string              // Template expanded at the last scan: the file to read
@@ -96,6 +100,9 @@ type file struct {
 	comp     string // "gzip", "bzip2", or "" for a plain file
 	offset   int64  // in the uncompressed data
 	pending  string // start of a line not terminated yet
+	// lines is the number of complete lines before offset-len(pending), up
+	// to SkipLines; -1 when unknown (opened past the beginning).
+	lines    int64
 	headLen  int
 	headSum  string
 	head     []byte // first bytes of the uncompressed data, for compressed files
@@ -348,6 +355,7 @@ func (s *Files) openNew(e entry, atEnd bool) bool {
 				return false
 			}
 			f.r.Reset(f.f)
+			f.lines = -1
 		}
 		s.files = append(s.files, f)
 		verbose.Debugf("source %s: %s opened at offset %d", s.ID, e.path, f.offset)
@@ -468,6 +476,9 @@ func openFile(path string, offset int64) (*file, error) {
 			}
 		}
 		f.r, f.offset = bufio.NewReaderSize(fd, 64*1024), offset
+		if offset > 0 {
+			f.lines = -1
+		}
 		return f, nil
 	}
 
@@ -500,6 +511,35 @@ func openFile(path string, offset int64) (*file, error) {
 	return f, nil
 }
 
+// countLines counts the lines that end before offset in the uncompressed
+// data, up to limit, reading the file from its beginning apart from the
+// reader in use.
+func (f *file) countLines(offset, limit int64) (int64, error) {
+	var r io.Reader = io.NewSectionReader(f.f, 0, offset)
+	if f.comp != "" {
+		dr, err := decompress(f.comp, io.NewSectionReader(f.f, 0, f.size))
+		if err != nil {
+			return 0, err
+		}
+		r = io.LimitReader(dr, offset)
+	}
+	br := bufio.NewReaderSize(r, 64*1024)
+	var n int64
+	for n < limit {
+		if _, err := br.ReadSlice('\n'); err != nil {
+			if errors.Is(err, bufio.ErrBufferFull) {
+				continue // a line longer than the buffer
+			}
+			if errors.Is(err, io.EOF) {
+				return n, nil
+			}
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
 // skip moves a compressed file forward to offset (of the uncompressed data).
 func (f *file) skip(offset int64) error {
 	if offset <= f.offset {
@@ -507,6 +547,7 @@ func (f *file) skip(offset int64) error {
 	}
 	n, err := io.CopyN(io.Discard, f.r, offset-f.offset)
 	f.offset += n
+	f.lines = -1
 	if err != nil {
 		return fmt.Errorf("%s: shorter than the saved position %d: %w", f.name, offset, err)
 	}
@@ -603,14 +644,31 @@ func (s *Files) Read(ctx context.Context) (*source.Record, error) {
 func (s *Files) readLine(f *file) (*source.Record, error) {
 	// A compressed file does not grow: its end is final.
 	final := !s.Follow || f.comp != "" || (f.draining && f.idle >= drainPolls)
-	line, ok, err := f.line(final)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", f.name, err)
+	var line string
+	for {
+		if s.SkipLines > 0 && f.lines < 0 {
+			n, err := f.countLines(f.offset-int64(len(f.pending)), int64(s.SkipLines))
+			if err != nil {
+				return nil, fmt.Errorf("%s: counting the lines to skip: %w", f.name, err)
+			}
+			f.lines = n
+		}
+		l, ok, err := f.line(final)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f.name, err)
+		}
+		if !ok {
+			return nil, nil
+		}
+		f.idle = 0
+		if s.SkipLines == 0 || f.lines >= int64(s.SkipLines) {
+			line = l
+			break
+		}
+		// A header line. Its position is saved with the next line read.
+		f.lines++
+		verbose.Debugf("source %s: %s: line %d skipped (skip_lines)", s.ID, f.name, f.lines)
 	}
-	if !ok {
-		return nil, nil
-	}
-	f.idle = 0
 	pos, err := f.position()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", f.name, err)
@@ -718,7 +776,7 @@ func (s *Files) rescan() (bool, error) {
 				return false, err
 			}
 			f.r.Reset(f.f)
-			f.offset, f.pending, f.headLen, f.headSum = 0, "", 0, ""
+			f.offset, f.pending, f.headLen, f.headSum, f.lines = 0, "", 0, "", 0
 		}
 	}
 

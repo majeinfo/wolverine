@@ -73,6 +73,9 @@ type Source struct {
 	Follow    bool
 	// VisibilityTimeout of the messages being read (default: 5m).
 	VisibilityTimeout time.Duration
+	// SkipLines is the number of lines ignored at the beginning of each
+	// object (a header).
+	SkipLines int
 	// WaitTime of the long polling (default: 20s when following, 2s
 	// otherwise).
 	WaitTime time.Duration
@@ -95,6 +98,7 @@ type message struct {
 	file       string   // the object being read
 	body       io.Closer
 	r          *bufio.Reader
+	lines      int       // lines read from the object
 	extended   time.Time // when its visibility was last set
 }
 
@@ -268,6 +272,10 @@ func (s *Source) readMessage(ctx context.Context, m *message) (*source.Record, e
 			return nil, nil
 		}
 	}
+	if m.lines++; m.lines <= s.SkipLines {
+		verbose.Debugf("source %s: %s: line %d skipped (skip_lines)", s.ID, m.file, m.lines)
+		return nil, nil
+	}
 	return &source.Record{
 		Data:      []byte(strings.TrimRight(line, "\r\n")),
 		Timestamp: time.Now(),
@@ -287,7 +295,7 @@ func (s *Source) openObject(ctx context.Context, m *message, o object) error {
 		out.Body.Close()
 		return err
 	}
-	m.file, m.body, m.r = o.String(), out.Body, bufio.NewReaderSize(r, readerBuffer)
+	m.file, m.body, m.r, m.lines = o.String(), out.Body, bufio.NewReaderSize(r, readerBuffer), 0
 	return nil
 }
 

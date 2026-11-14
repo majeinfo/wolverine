@@ -44,6 +44,9 @@ func buildSources(cfgs []config.Source) ([]*input, error) {
 }
 
 func buildSource(c config.Source) (*input, error) {
+	if c.SkipLines < 0 {
+		return nil, fmt.Errorf("skip_lines: %d: a number of lines, 0 or more", c.SkipLines)
+	}
 	if c.Type != "aws-s3" && (c.QueueURL != "" || c.KeyRegexp != "" || c.VisibilityTimeout != 0 || c.AWS != (config.AWS{})) {
 		return nil, fmt.Errorf("queue_url, key_regexp, visibility_timeout and aws only apply to an aws-s3 source")
 	}
@@ -72,6 +75,8 @@ func buildSource(c config.Source) (*input, error) {
 			return nil, errors.New("timestamp_formats does not apply to a systemd-service source (the journal timestamps are used)")
 		case c.Timezone != "":
 			return nil, errors.New("timezone does not apply to a systemd-service source")
+		case c.SkipLines != 0:
+			return nil, errors.New("skip_lines does not apply to a systemd-service source (it has no header)")
 		}
 		return buildSystemdService(c)
 	case "":
@@ -120,6 +125,7 @@ func buildLogfile(c config.Source) (*input, error) {
 		return nil, err
 	}
 	src.StartAtEnd = startAtEnd
+	src.SkipLines = c.SkipLines
 	src.Location = p.Location
 	return &input{source: src, parser: p}, nil
 }

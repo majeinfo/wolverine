@@ -98,6 +98,10 @@ type Source struct {
 	// follow). When state_file holds a position for the source, it is used
 	// instead.
 	StartAt string `yaml:"start_at"`
+	// SkipLines is the number of lines ignored at the beginning of each
+	// file (logfile) or object (aws-s3), e.g. a header that names the
+	// columns. Default: 0.
+	SkipLines int `yaml:"skip_lines"`
 	// Regexp parses each line; its named groups fill the event fields.
 	// Required for logfile. Optional for systemd-service, where it is
 	// applied to the message only, the other fields coming from the journal.
