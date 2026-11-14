@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"wolverine/internal/action"
 	"wolverine/internal/engine"
 	"wolverine/internal/event"
 	"wolverine/internal/stats"
@@ -189,6 +190,8 @@ type alertFilter struct {
 	rules    []string
 	severity []string
 	events   string // none, last, all
+	// pendingUndo keeps only the alerts with an undo not run yet.
+	pendingUndo bool
 }
 
 func parseAlertFilter(q url.Values) (alertFilter, error) {
@@ -204,6 +207,13 @@ func parseAlertFilter(q url.Values) (alertFilter, error) {
 			return f, badRequest("events: %q: none, last or all", v)
 		}
 		f.events = v
+	}
+	switch v := q.Get("undo"); v {
+	case "":
+	case "pending":
+		f.pendingUndo = true
+	default:
+		return f, badRequest("undo: %q: pending is the only value", v)
 	}
 	return f, nil
 }
@@ -227,19 +237,72 @@ func (f alertFilter) apply(a *event.Alert) *event.Alert {
 	return &c
 }
 
-// alertView is an alert with its action log: what its actions did, and
-// the undo actions planned or run, in that order.
+// alertView is an alert with when it was raised, its action log (what its
+// actions did, and the undo actions planned or run, in that order), and
+// its undo not run yet, if any.
 type alertView struct {
 	*event.Alert
+	// Raised is when wolverine raised the alert; Timestamp is the time of
+	// its event, from the log. Zero for an alert no longer kept (see
+	// max_lifetime) whose undo is still pending.
+	Raised  time.Time `json:",omitzero"`
 	Actions []event.ActionRun
+	Undo    *undoView `json:",omitempty"`
 }
 
-func (f alertFilter) view(r engine.AlertRecord) alertView {
-	v := alertView{f.apply(r.Alert), r.Actions}
+// undoView is an undo not run yet.
+type undoView struct {
+	// Action is the action undone; Actions are the undo actions left to
+	// run, at Due.
+	Action   string
+	Actions  []string
+	Due      time.Time
+	Attempts int `json:",omitempty"`
+}
+
+func (f alertFilter) view(r engine.AlertRecord, p *action.Pending) alertView {
+	v := alertView{Alert: f.apply(r.Alert), Raised: r.Raised, Actions: r.Actions}
 	if v.Actions == nil {
 		v.Actions = []event.ActionRun{}
 	}
+	if p != nil {
+		v.Undo = &undoView{Action: p.Action, Actions: p.Actions, Due: p.Due, Attempts: p.Attempts}
+	}
 	return v
+}
+
+// raised returns when an alert was raised, or, if no longer kept, the
+// time of its event.
+func raised(r engine.AlertRecord) time.Time {
+	if r.Raised.IsZero() {
+		return r.Alert.Timestamp
+	}
+	return r.Raised
+}
+
+// alertRecords returns the alerts kept, newest first, and their pending
+// undos by alert id. The alerts whose undo is pending but that are no
+// longer kept (an undo after more than max_lifetime) are included, without
+// their action log.
+func (s *Server) alertRecords() ([]engine.AlertRecord, map[string]*action.Pending) {
+	records := s.backend.AlertRecords()
+	pending := map[string]*action.Pending{}
+	for _, p := range s.backend.PendingUndos() {
+		if p.Alert != nil {
+			pending[p.Alert.ID] = &p
+		}
+	}
+	kept := make(map[string]bool, len(records))
+	for _, r := range records {
+		kept[r.Alert.ID] = true
+	}
+	for id, p := range pending {
+		if !kept[id] {
+			records = append(records, engine.AlertRecord{Alert: p.Alert})
+		}
+	}
+	slices.SortStableFunc(records, func(a, b engine.AlertRecord) int { return raised(b).Compare(raised(a)) })
+	return records, pending
 }
 
 // actionNotice is a run added to the action log of an alert, as sent by
@@ -258,8 +321,8 @@ type alertsResponse struct {
 	Alerts []alertView `json:"alerts"`
 }
 
-// alerts gives the alerts memorized (within the maximum lifetime) whose
-// timestamp is in [from, to), newest first.
+// alerts gives the alerts memorized (within the maximum lifetime) raised in
+// [from, to), newest first.
 func (s *Server) alerts(r *http.Request) (any, error) {
 	q := r.URL.Query()
 	from, to, err := s.interval(q, 0)
@@ -276,16 +339,16 @@ func (s *Server) alerts(r *http.Request) (any, error) {
 			return nil, badRequest("limit: %q: between 1 and %d", v, maxAlerts)
 		}
 	}
-	all := s.backend.AlertRecords()
+	records, pending := s.alertRecords()
 	resp := alertsResponse{Alerts: []alertView{}}
-	for i := len(all) - 1; i >= 0; i-- {
-		a := all[i].Alert
-		if a.Timestamp.Before(from) || !a.Timestamp.Before(to) || !f.match(a) {
+	for _, r := range records {
+		t, p := raised(r), pending[r.Alert.ID]
+		if t.Before(from) || !t.Before(to) || !f.match(r.Alert) || (f.pendingUndo && p == nil) {
 			continue
 		}
 		resp.Total++
 		if len(resp.Alerts) < limit {
-			resp.Alerts = append(resp.Alerts, f.view(all[i]))
+			resp.Alerts = append(resp.Alerts, f.view(r, p))
 		}
 	}
 	return resp, nil
@@ -303,9 +366,10 @@ func (s *Server) alert(r *http.Request) (any, error) {
 		return nil, err
 	}
 	id := r.PathValue("id")
-	for _, rec := range s.backend.AlertRecords() {
+	records, pending := s.alertRecords()
+	for _, rec := range records {
 		if rec.Alert.ID == id {
-			return f.view(rec), nil
+			return f.view(rec, pending[id]), nil
 		}
 	}
 	return nil, &apiError{http.StatusNotFound, fmt.Sprintf("alert %q: not found (or expired, see max_lifetime)", id)}
@@ -381,7 +445,7 @@ func (s *Server) watch(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			b, err := json.Marshal(f.view(engine.AlertRecord{Alert: a}))
+			b, err := json.Marshal(f.view(engine.AlertRecord{Alert: a, Raised: n.Raised}, nil))
 			if err != nil {
 				continue
 			}

@@ -240,6 +240,18 @@ func (s *Scheduler) Pending() ([]Pending, bool) {
 	defer s.mu.Unlock()
 	changed := s.changed
 	s.changed = false
+	return s.list(), changed
+}
+
+// List returns the undos not run yet, by due time, without changing what
+// Pending reports.
+func (s *Scheduler) List() []Pending {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.list()
+}
+
+func (s *Scheduler) list() []Pending {
 	var list []Pending
 	for _, p := range s.pending {
 		c := *p
@@ -252,7 +264,7 @@ func (s *Scheduler) Pending() ([]Pending, bool) {
 		}
 		return list[i].Key < list[j].Key
 	})
-	return list, changed
+	return list
 }
 
 // Start runs the undos when they are due, until Stop.

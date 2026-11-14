@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"wolverine/internal/action"
 	"wolverine/internal/config"
 	"wolverine/internal/engine"
 	"wolverine/internal/event"
@@ -20,10 +21,11 @@ import (
 var t0 = time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
 
 type fakeBackend struct {
-	st     *stats.Store
-	alerts []engine.AlertRecord
-	mu     sync.Mutex
-	subs   []chan engine.Notice
+	st      *stats.Store
+	alerts  []engine.AlertRecord
+	pending []action.Pending
+	mu      sync.Mutex
+	subs    []chan engine.Notice
 }
 
 func (f *fakeBackend) Info() engine.Info {
@@ -31,6 +33,7 @@ func (f *fakeBackend) Info() engine.Info {
 }
 func (f *fakeBackend) Stats() *stats.Store                { return f.st }
 func (f *fakeBackend) AlertRecords() []engine.AlertRecord { return f.alerts }
+func (f *fakeBackend) PendingUndos() []action.Pending     { return f.pending }
 func (f *fakeBackend) Watch() (<-chan engine.Notice, func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -69,11 +72,13 @@ func newTest(t *testing.T, token string) (*fakeBackend, *httptest.Server) {
 	st.Matched([]string{"brute"}, []string{"brute"})
 	b := &fakeBackend{st: st, alerts: []engine.AlertRecord{
 		{Alert: &event.Alert{ID: "a1", RuleID: "brute", Severity: "high", Timestamp: t0, Events: []*event.Event{{Raw: "one"}, {Raw: "two"}}},
+			Raised: t0,
 			Actions: []event.ActionRun{
 				{Time: t0, Action: "block-ip", Status: event.ActionOK},
 				{Time: t0, Action: "unblock-ip", UndoOf: "block-ip", Status: event.ActionPlanned, Due: t0.Add(time.Hour)},
 			}},
-		{Alert: &event.Alert{ID: "a2", RuleID: "other", Severity: "low", Timestamp: t0.Add(20 * time.Minute), Events: []*event.Event{{Raw: "three"}}}},
+		{Alert: &event.Alert{ID: "a2", RuleID: "other", Severity: "low", Timestamp: t0.Add(20 * time.Minute), Events: []*event.Event{{Raw: "three"}}},
+			Raised: t0.Add(20 * time.Minute)},
 	}}
 	t.Setenv("TEST_TOKEN", token)
 	cfg := config.HTTP{}
@@ -293,6 +298,53 @@ func TestAlerts(t *testing.T) {
 	}
 }
 
+// The range is on when the alerts were raised, not on the time of their
+// events; the alerts with an undo still pending can be asked for, whatever
+// their age, even when no longer kept.
+func TestAlertsRaisedAndPendingUndo(t *testing.T) {
+	b, srv := newTest(t, "")
+	old := &event.Alert{ID: "old", RuleID: "brute", Timestamp: t0.Add(-3 * time.Hour)} // a log read late
+	gone := &event.Alert{ID: "gone", RuleID: "brute", Timestamp: t0.Add(-48 * time.Hour)}
+	b.alerts = append(b.alerts, engine.AlertRecord{Alert: old, Raised: t0.Add(25 * time.Minute)})
+	b.pending = []action.Pending{
+		{Action: "block-ip", Actions: []string{"unblock-ip"}, Due: t0.Add(2 * time.Hour), Alert: b.alerts[0].Alert},
+		{Action: "block-ip", Actions: []string{"unblock-ip"}, Due: t0.Add(time.Hour), Attempts: 1, Alert: gone},
+	}
+	ids := func(q string) string {
+		t.Helper()
+		var r alertsResponse
+		if resp := get(t, srv.URL+"/api/v1/alerts?"+q, "", &r); resp.StatusCode != 200 {
+			t.Fatalf("%s: %d", q, resp.StatusCode)
+		}
+		var s []string
+		for _, a := range r.Alerts {
+			id := a.ID
+			if a.Undo != nil {
+				id += "(undo " + a.Undo.Due.Format("15:04") + ")"
+			}
+			s = append(s, id)
+		}
+		return strings.Join(s, ",")
+	}
+	for q, want := range map[string]string{
+		"from=-10m":                              "old,a2", // raised at 10:25: newest first
+		"":                                       "old,a2,a1(undo 12:00),gone(undo 11:00)",
+		"undo=pending":                           "a1(undo 12:00),gone(undo 11:00)",
+		"undo=pending&from=2026-11-13T09:00:00Z": "a1(undo 12:00)",
+	} {
+		if got := ids(q); got != want {
+			t.Errorf("%q: %s, want %s", q, got, want)
+		}
+	}
+	var one alertView
+	if resp := get(t, srv.URL+"/api/v1/alerts/gone", "", &one); resp.StatusCode != 200 || one.Undo == nil || one.Undo.Attempts != 1 || !one.Raised.IsZero() {
+		t.Errorf("alert gone: %d %+v", resp.StatusCode, one)
+	}
+	if resp := get(t, srv.URL+"/api/v1/alerts?undo=done", "", nil); resp.StatusCode != 400 {
+		t.Errorf("undo=done: %d", resp.StatusCode)
+	}
+}
+
 func TestWatch(t *testing.T) {
 	b, srv := newTest(t, "")
 	resp, err := http.Get(srv.URL + "/api/v1/alerts/watch?rule=brute&events=none")
@@ -331,7 +383,7 @@ func TestWatch(t *testing.T) {
 	x1 := &event.Alert{ID: "x1", RuleID: "other"}
 	x2 := &event.Alert{ID: "x2", RuleID: "brute", Events: []*event.Event{{Raw: "secret line"}}}
 	b.publish(engine.Notice{Alert: x1})
-	b.publish(engine.Notice{Alert: x2})
+	b.publish(engine.Notice{Alert: x2, Raised: t0})
 	b.publish(engine.Notice{Alert: x1, Action: &event.ActionRun{Action: "mail", Status: event.ActionOK}})
 	b.publish(engine.Notice{Alert: x2, Action: &event.ActionRun{Action: "block-ip", Status: event.ActionFailed, Error: "boom"}})
 	next := func() string {
@@ -341,7 +393,8 @@ func TestWatch(t *testing.T) {
 		}
 		return got
 	}
-	if got := next(); !strings.HasPrefix(got, "event: alert\nid: x2\ndata: {") || strings.Contains(got, "secret line") || !strings.Contains(got, `"Actions":[]`) {
+	if got := next(); !strings.HasPrefix(got, "event: alert\nid: x2\ndata: {") || strings.Contains(got, "secret line") ||
+		!strings.Contains(got, `"Raised":"2026-11-13T10:00:00Z","Actions":[]`) {
 		t.Errorf("alert block: %q", got)
 	}
 	if got := next(); got != `event: action

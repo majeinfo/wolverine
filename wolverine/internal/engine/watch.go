@@ -2,6 +2,7 @@ package engine
 
 import (
 	"sync"
+	"time"
 
 	"wolverine/internal/event"
 )
@@ -13,7 +14,9 @@ const watchBuffer = 256
 // Notice is what watchers receive: an alert raised (Action nil), or a run
 // added to the action log of an alert (Action not nil).
 type Notice struct {
-	Alert  *event.Alert
+	Alert *event.Alert
+	// Raised is when the alert was raised (alert notices only).
+	Raised time.Time
 	Action *event.ActionRun
 }
 

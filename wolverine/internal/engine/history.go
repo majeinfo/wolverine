@@ -30,6 +30,9 @@ type remembered struct {
 // AlertRecord is an alert memorized and its action log.
 type AlertRecord struct {
 	Alert *event.Alert
+	// Raised is when wolverine raised it (wall clock), whereas the alert's
+	// Timestamp is the time of its event, read from the log.
+	Raised time.Time
 	// Actions are what happened to its actions, in that order.
 	Actions []event.ActionRun
 }
@@ -132,7 +135,7 @@ func (h *history) records() []AlertRecord {
 	defer h.mu.Unlock()
 	records := make([]AlertRecord, len(h.alerts))
 	for i, r := range h.alerts {
-		records[i] = AlertRecord{Alert: r.alert, Actions: slices.Clone(r.actions)}
+		records[i] = AlertRecord{Alert: r.alert, Raised: r.at, Actions: slices.Clone(r.actions)}
 	}
 	return records
 }

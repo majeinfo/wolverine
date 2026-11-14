@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"wolverine/internal/action"
 	"wolverine/internal/config"
 	"wolverine/internal/engine"
 	"wolverine/internal/stats"
@@ -39,6 +40,7 @@ type Backend interface {
 	Info() engine.Info
 	Stats() *stats.Store
 	AlertRecords() []engine.AlertRecord
+	PendingUndos() []action.Pending
 	Watch() (<-chan engine.Notice, func())
 }
 

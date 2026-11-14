@@ -266,6 +266,12 @@ func (e *Engine) AlertRecords() []AlertRecord {
 	return e.history.records()
 }
 
+// PendingUndos returns the undos not run yet, by due time. Their Alert is
+// the alert they were planned for (the latest one, if postponed).
+func (e *Engine) PendingUndos() []action.Pending {
+	return e.undo.List()
+}
+
 // recordAction adds a run to the action log of an alert (if still
 // memorized) and tells the watchers.
 func (e *Engine) recordAction(alertID string, run event.ActionRun) {
@@ -486,7 +492,8 @@ func (e *Engine) Run(ctx context.Context) error {
 		e.stats.Matched(matched, alerted)
 		for _, a := range alerts {
 			nAlerts++
-			e.history.add(a, time.Now())
+			raised := time.Now()
+			e.history.add(a, raised)
 			verbose.Infof("alert %s: %s", a.RuleID, a.Message)
 			if alertEnc != nil {
 				if err := alertEnc.Encode(e.AlertEvents.apply(a)); err != nil {
@@ -494,7 +501,7 @@ func (e *Engine) Run(ctx context.Context) error {
 				}
 			}
 			// The alert first, then what its actions do.
-			e.watchers.publish(Notice{Alert: a})
+			e.watchers.publish(Notice{Alert: a, Raised: raised})
 			dispatcher.Dispatch(a)
 		}
 	}

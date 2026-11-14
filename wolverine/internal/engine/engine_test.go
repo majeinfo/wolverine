@@ -779,6 +779,7 @@ func TestRunUndo(t *testing.T) {
 			{ID: "unblock", Type: "webhook", Webhook: config.Webhook{URL: srv.URL + "/unblock"}},
 		},
 	}
+	var raised time.Time
 	// run runs wolverine and returns the action log of the alert, and the
 	// notices watched.
 	run := func() (string, string) {
@@ -803,6 +804,19 @@ func TestRunUndo(t *testing.T) {
 		records := eng.AlertRecords()
 		if len(records) != 1 {
 			t.Fatalf("%d alerts", len(records))
+		}
+		// Raised when first read, kept across restarts.
+		if raised == (time.Time{}) {
+			raised = records[0].Raised
+		}
+		if !records[0].Raised.Equal(raised) || raised.IsZero() {
+			t.Errorf("raised at %s, want %s", records[0].Raised, raised)
+		}
+		// The pending undo is that of the alert kept.
+		for _, p := range eng.PendingUndos() {
+			if p.Alert.ID != records[0].Alert.ID {
+				t.Errorf("pending undo for alert %s, kept %s", p.Alert.ID, records[0].Alert.ID)
+			}
 		}
 		var log []string
 		for _, r := range records[0].Actions {
@@ -846,6 +860,9 @@ func TestRunUndo(t *testing.T) {
 	// The action log is kept in the state file.
 	if log, watched := run(); log != "block ok, unblock<block planned" || watched != "" {
 		t.Errorf("second run: log %q, watched %q", log, watched)
+	}
+	if eng, err := New(cfg); err != nil || len(eng.PendingUndos()) != 1 {
+		t.Errorf("pending undos after a restart: %v", err)
 	}
 	if got := called(); got != "" || len(savedUndos()) != 1 {
 		t.Fatalf("second run: %q, %+v", got, savedUndos())

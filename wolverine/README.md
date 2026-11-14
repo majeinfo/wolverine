@@ -1074,10 +1074,22 @@ and the same `totals`, `sources` and `rules`.
 
 | Parameter | Meaning |
 |---|---|
-| `from`, `to` | on the alert's timestamp |
+| `from`, `to` | on when the alert was raised (`Raised`), like the counters |
 | `rule`, `severity` | only those; several values separated by commas |
+| `undo=pending` | only the alerts with an undo not run yet, whatever their age |
 | `limit` | at most that many alerts (default 100, at most 10000); `total` counts them all |
 | `events` | `last` (default): the last event of each alert; `all`; `none` |
+
+An alert has two times: `Raised`, when wolverine raised it, and
+`Timestamp`, the time of its last event as read from the log (older for a
+log read late, such as files downloaded from S3).
+
+An alert whose undo is not run yet has `Undo`: the action undone
+(`Action`), the undo actions left (`Actions`), when they run (`Due`), and
+the failed attempts (`Attempts`). These alerts are kept in the state file
+with their undos, so they are still listed after a restart. If the undo
+runs after more than `max_lifetime`, the alert is no longer kept, but
+`undo=pending` still lists it, without `Raised` or action log.
 
 Each alert has its **action log**, `Actions`: what happened to its actions,
 in order, undo actions included. An entry has:
@@ -1111,7 +1123,8 @@ state file. The undo of an alert that is no longer kept still runs, but is
 not logged.
 
 **`/alerts/ID`** gives one alert, with all its events (`events` as above
-changes this), or a 404 if it is not kept (anymore).
+changes this), or a 404 if it is not kept (anymore) and has no undo
+pending.
 
 **`/alerts/watch`** streams the alerts as they are raised, and the entries
 added to their action logs, as
@@ -1151,9 +1164,11 @@ hours), refreshed every 10 s to 1 min:
   and lines by source. Hover a chart, or focus it and use the arrow keys,
   for the values.
 - **Tables:** the counters of each source and rule.
-- **Alerts:** the alerts of the range, then the new ones as they are raised,
-  with the latest status of each of their actions (undo actions included),
-  updated live. Select one for its last log line and its action log.
+- **Alerts:** the alerts raised in the range, plus the older ones whose
+  undo is still planned (what they did, such as a blocked address, is still
+  in effect), then the new ones as they are raised. Each shows the latest
+  status of its actions (undo actions included), updated live. Select one
+  for its last log line, its event time and its action log.
 
 It follows the system's light or dark mode; the Theme button switches it.
 The dashboard is built into the binary and loads nothing from the Internet.

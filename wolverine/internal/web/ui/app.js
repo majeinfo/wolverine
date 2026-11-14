@@ -492,9 +492,16 @@
     return [...latest.entries()].sort((a, b) => order.get(a[0]) - order.get(b[0])).map((e) => e[1]);
   }
 
+  // undoRuns returns the planned runs of an alert's pending undo, for an
+  // alert whose action log is not available (no longer kept).
+  function undoRuns(a) {
+    if (!a.Undo) return [];
+    return a.Undo.Actions.map((id) => ({ Action: id, UndoOf: a.Undo.Action, Status: "planned", Due: a.Undo.Due }));
+  }
+
   function actionsSummary(a) {
     const td = el("td", "actions");
-    const runs = latestRuns(a.Actions);
+    const runs = latestRuns((a.Actions && a.Actions.length) ? a.Actions : undoRuns(a));
     if (!runs.length) {
       td.append(el("span", "muted", ruleActions(a.RuleID).length ? "pending" : "none"));
       return td;
@@ -517,6 +524,11 @@
     const wrap = el("div", "action-log");
     wrap.append(el("h3", "", "Actions"));
     const runs = a.Actions || [];
+    if (!runs.length && a.Undo) {
+      wrap.append(el("p", "muted", "No longer kept (max_lifetime), so its action log is gone; its undo is still planned: " +
+        a.Undo.Actions.join(", ") + " at " + new Date(a.Undo.Due).toLocaleString() + "."));
+      return wrap;
+    }
     if (!runs.length) {
       const acts = ruleActions(a.RuleID);
       wrap.append(el("p", "muted", acts.length ? "Not run yet: " + acts.join(", ") + "." : "The rule has no action."));
@@ -585,7 +597,7 @@
       sev.append(severityBadge(a.Severity));
       const summary = actionsSummary(a);
       if (updatedIDs && updatedIDs.has(a.ID)) summary.classList.add("new");
-      tr.append(cell(timeLabel(new Date(a.Timestamp), true), "time"), sev, cell(a.RuleID), cell(alertValue(a)), cell(a.Message, "message"), summary);
+      tr.append(cell(timeLabel(raisedAt(a), true), "time"), sev, cell(a.RuleID), cell(alertValue(a)), cell(a.Message, "message"), summary);
       const toggle = () => {
         if (state.open.has(a.ID)) state.open.delete(a.ID); else state.open.add(a.ID);
         renderFeed();
@@ -599,7 +611,8 @@
         td.colSpan = 6;
         const evs = a.Events || [];
         const last = evs.length ? evs[evs.length - 1] : null;
-        const lines = ["Alert " + a.ID];
+        const lines = ["Alert " + a.ID + (a.Raised ? ", raised " + raisedAt(a).toLocaleString() : "")];
+        if (a.Timestamp) lines.push("Event time: " + new Date(a.Timestamp).toLocaleString());
         if (last) {
           lines.push("Last event: " + [last.Source, last.Hostname, last.Service].filter(Boolean).join(" / "));
           lines.push(last.Raw || last.Message || "");
@@ -639,13 +652,25 @@
   // --- loading -------------------------------------------------------------
   function rangeParam() { return "-" + state.range; }
 
+  // raisedAt is when wolverine raised an alert (its Timestamp, from the log,
+  // for an alert no longer kept).
+  function raisedAt(a) { return new Date(a.Raised || a.Timestamp); }
+
+  // loadFeed loads the alerts raised in the range, and those whose undo is
+  // still planned, whatever their age: what they did is still in effect.
   async function loadFeed() {
-    const r = await api("/api/v1/alerts?events=last&limit=" + MAX_FEED + "&from=" + encodeURIComponent(rangeParam()));
-    state.feed = r.alerts;
-    state.feedIDs = new Set(r.alerts.map((a) => a.ID));
+    const [r, pending] = await Promise.all([
+      api("/api/v1/alerts?events=last&limit=" + MAX_FEED + "&from=" + encodeURIComponent(rangeParam())),
+      api("/api/v1/alerts?events=last&undo=pending&limit=" + MAX_FEED),
+    ]);
+    const ids = new Set(r.alerts.map((a) => a.ID));
+    const older = pending.alerts.filter((a) => !ids.has(a.ID));
+    state.feed = r.alerts.concat(older).sort((a, b) => raisedAt(b) - raisedAt(a));
+    state.feedIDs = new Set(state.feed.map((a) => a.ID));
     renderFeed();
-    $("sub-feed").textContent = (r.total > r.alerts.length ? "Latest " + r.alerts.length + " of " + fmt.format(r.total) : fmt.format(r.total)) +
-      " in this range, newest first; new alerts and actions appear as they happen. Select a row for its last log line and its action log.";
+    let text = (r.total > r.alerts.length ? "Latest " + r.alerts.length + " of " + fmt.format(r.total) : fmt.format(r.total)) + " raised in this range";
+    if (older.length) text += ", and " + older.length + " older with an undo still planned";
+    $("sub-feed").textContent = text + ", newest first; new alerts and actions appear as they happen. Select a row for its last log line and its action log.";
   }
 
   async function load(withFeed) {
