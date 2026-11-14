@@ -1,5 +1,20 @@
 # Wolverine configuration.
 
+# Variables: values reused in the rest of the configuration, written
+# ${name}. Alone, ${name} is replaced by the value, whatever its type (a
+# number, a list, a mapping...); inside text, by its text. The variables of
+# this file can be used in the included files too; those of an included file
+# only in that file. $${ gives a literal ${. year, month, day, hour, minute
+# and second are the date macros of the paths, not variables.
+variables:
+  waf_ipset: wolverine-blocklist
+  waf_aws:
+    region: eu-west-3
+    # profile: wolverine
+    # credentials_file: /etc/wolverine/aws/credentials
+    # access_key_id_env: WOLVERINE_WAF_KEY_ID
+    # secret_access_key_env: WOLVERINE_WAF_SECRET_KEY
+
 # Exclude lists: named lists of IP addresses and CIDR ranges that rules can
 # ignore. An entry may also be the id of another exclude list, whose entries
 # are added. Lists are used in the "exclude" of:
@@ -240,14 +255,9 @@ actions:
     type: aws-waf-ipset
     disabled: true
     ipset:
-      name: wolverine-blocklist
+      name: ${waf_ipset}
       scope: REGIONAL            # or CLOUDFRONT (us-east-1)
-    aws:
-      region: eu-west-3
-      # profile: wolverine
-      # credentials_file: /etc/wolverine/aws/credentials
-      # access_key_id_env: WOLVERINE_WAF_KEY_ID
-      # secret_access_key_env: WOLVERINE_WAF_SECRET_KEY
+    aws: ${waf_aws}              # see variables, at the top
     undo:
       after: 1h
       actions: [waf-unblock]
@@ -257,10 +267,9 @@ actions:
     type: aws-waf-ipset
     disabled: true
     ipset:
-      name: wolverine-blocklist
+      name: ${waf_ipset}
       operation: remove
-    aws:
-      region: eu-west-3
+    aws: ${waf_aws}
 
   # POST the alert as JSON (as on stdout with -detailed-events, at most
   # max_events events) to an HTTP endpoint.

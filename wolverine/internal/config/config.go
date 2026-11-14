@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -293,7 +294,7 @@ type Match struct {
 // file. Unknown keys
 // are rejected so that typos do not silently disable part of a rule.
 func Load(path string) (*Config, error) {
-	cfg, err := loadFile(path)
+	cfg, global, err := loadFile(path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +320,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("%s: include_dir: %w", path, err)
 	}
 	for _, f := range files {
-		part, err := loadFile(f)
+		part, _, err := loadFile(f, global)
 		if err != nil {
 			return nil, err
 		}
@@ -338,23 +339,42 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// loadFile decodes one configuration file. An empty file is valid.
-func loadFile(path string) (*Config, error) {
+// loadFile decodes one configuration file, and returns it with its
+// variables. global holds those of the main file, nil when reading it. An
+// empty file is valid.
+func loadFile(path string, global *variables) (*Config, *variables, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-
+	var doc yaml.Node
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&doc); err != nil && !errors.Is(err, io.EOF) {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	vars, err := takeVariables(&doc, path, global)
+	if err != nil {
+		return nil, nil, err
+	}
 	var cfg Config
-	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
-		if obsolete(data) {
-			return nil, fmt.Errorf("%s: allowlist and use_allowlist were replaced by exclude_lists and the exclude of each rule (see the README)", path)
-		}
-		return nil, fmt.Errorf("%s: %w", path, err)
+	root := top(&doc)
+	if root == nil {
+		return &cfg, vars, nil
 	}
-	return &cfg, nil
+	if root, err = vars.replace(root); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	// Unknown keys are rejected, so that typos do not silently disable
+	// part of a rule.
+	if err := checkKnown(root, reflect.TypeOf(cfg)); err != nil {
+		if obsolete(data) {
+			return nil, nil, fmt.Errorf("%s: allowlist and use_allowlist were replaced by exclude_lists and the exclude of each rule (see the README)", path)
+		}
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := root.Decode(&cfg); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &cfg, vars, nil
 }
 
 // obsolete reports whether a configuration file uses the allowlist settings

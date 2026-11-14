@@ -19,6 +19,8 @@ within 5 minutes.
 - [Build](#build)
 - [Run](#run)
 - [Configure](#configure)
+  - [Configuration directory](#configuration-directory)
+  - [Variables](#variables)
   - [Sources](#sources)
   - [Rules](#rules)
   - [Actions](#actions)
@@ -155,6 +157,56 @@ of the file names. Prefix the names with numbers to choose the order:
   `20-web.yaml.disabled`.
 
 With `-v`, wolverine lists the included files it read.
+
+### Variables
+
+The `variables` section of a file names values that several sources,
+actions or rules share. Write `${name}` to use one:
+
+```yaml
+variables:
+  logdir: /var/log/app
+  threshold: 5
+  admins: [192.0.2.10, 192.0.2.11]
+  waf_aws:
+    region: eu-west-3
+    profile: wolverine
+  description: more than ${threshold} failures   # a variable may use others
+
+exclude_lists:
+  - id: admins
+    entries: ${admins}                      # a list
+
+actions:
+  - id: waf-block
+    type: aws-waf-ipset
+    ipset: {name: blocklist}
+    aws: ${waf_aws}                         # a mapping
+
+rules:
+  - id: brute-force
+    count: ${threshold}                     # a number
+    description: ${description} in 10 min   # inside text
+```
+
+- **Alone** as a value, `${name}` is replaced by the variable's value,
+  whatever its type: a number, a duration, a list or a mapping.
+- **Inside text**, `${name}` is replaced by the variable's text: the
+  variable must then be a single value, not a list or a mapping.
+  `"${threshold}0"` gives 50.
+- **Scope:** the variables of the main file can be used in every file.
+  Those of an included file can only be used in that file, and cannot
+  redefine a variable of the main file.
+- **Errors:** an undefined variable, or one that refers to itself, is an
+  error that gives the file and the line.
+- **Date macros:** `year`, `month`, `day`, `hour`, `minute` and `second` are
+  the [date macros of a path](#logfile-log-files) (`${day-1}`...), not
+  variables: they are left for the path, and cannot be variable names.
+  `path: ${logdir}/app.log.${year}-${month}-${day}` uses both.
+- **Escape:** `$${` gives a literal `${`.
+- **Only values:** the keys (`count:`, `rules:`...) are not replaced.
+- **Secrets:** keep them in environment variables, with the `*_env`
+  settings, not in variables.
 
 ### Sources
 
