@@ -14,23 +14,23 @@ func TestStore(t *testing.T) {
 
 	// 10:00:10: 3 lines of ssh, one unparsed; a match.
 	at(10 * time.Second)
-	s.Line("ssh", true, false)
-	s.Line("ssh", true, false)
-	s.Line("ssh", false, true)
+	s.Line("ssh", 10, true, false)
+	s.Line("ssh", 10, true, false)
+	s.Line("ssh", 10, false, true)
 	s.Matched([]string{"brute"}, nil)
 	// 10:02:30: a line of web, excluded; a line of ssh: match and alert.
 	at(150 * time.Second)
-	s.Line("web", true, false)
+	s.Line("web", 10, true, false)
 	s.Excluded("web")
-	s.Line("ssh", true, false)
+	s.Line("ssh", 10, true, false)
 	s.Matched([]string{"brute"}, []string{"brute"})
 	s.Matched(nil, nil)
 
 	tot := s.Total()
-	if tot.Totals != (Totals{Source{5, 4, 1, 1}, Rule{2, 1}}) {
+	if tot.Totals != (Totals{Source{5, 4, 1, 1, 50}, Rule{2, 1}}) {
 		t.Errorf("totals: %+v", tot.Totals)
 	}
-	if *tot.Sources["ssh"] != (Source{4, 3, 1, 0}) || *tot.Sources["web"] != (Source{1, 1, 0, 1}) {
+	if *tot.Sources["ssh"] != (Source{4, 3, 1, 0, 40}) || *tot.Sources["web"] != (Source{1, 1, 0, 1, 10}) {
 		t.Errorf("sources: %+v %+v", tot.Sources["ssh"], tot.Sources["web"])
 	}
 	if *tot.Rules["brute"] != (Rule{2, 1}) || *tot.Rules["idle"] != (Rule{}) {

@@ -64,11 +64,11 @@ func newTest(t *testing.T, token string) (*fakeBackend, *httptest.Server) {
 	clock := t0.Add(10 * time.Second)
 	st := stats.New([]string{"ssh"}, []string{"brute"})
 	st.Now = func() time.Time { return clock }
-	st.Line("ssh", true, false)
-	st.Line("ssh", true, false)
-	st.Line("ssh", false, true)
+	st.Line("ssh", 10, true, false)
+	st.Line("ssh", 10, true, false)
+	st.Line("ssh", 10, false, true)
 	clock = t0.Add(20 * time.Minute)
-	st.Line("ssh", true, false)
+	st.Line("ssh", 10, true, false)
 	st.Matched([]string{"brute"}, []string{"brute"})
 	b := &fakeBackend{st: st, alerts: []engine.AlertRecord{
 		{Alert: &event.Alert{ID: "a1", RuleID: "brute", Severity: "high", Timestamp: t0, Events: []*event.Event{{Raw: "one"}, {Raw: "two"}}},
@@ -174,7 +174,7 @@ func TestStats(t *testing.T) {
 	_, srv := newTest(t, "")
 	var r statsResponse
 	get(t, srv.URL+"/api/v1/stats", "", &r)
-	if !r.SinceStart || r.Totals.Lines != 4 || r.Totals.Unparsed != 1 || r.Totals.Alerts != 1 || r.Sources["ssh"].Events != 3 || r.Rules["brute"].Matches != 1 {
+	if !r.SinceStart || r.Totals.Lines != 4 || r.Totals.Bytes != 40 || r.Sources["ssh"].Bytes != 40 || r.Totals.Unparsed != 1 || r.Totals.Alerts != 1 || r.Sources["ssh"].Events != 3 || r.Rules["brute"].Matches != 1 {
 		t.Errorf("since start: %+v", r)
 	}
 	// The last 15 minutes (from 10:15): the 10:20 bucket only.

@@ -12,6 +12,16 @@
 
   const $ = (id) => document.getElementById(id);
   const fmt = new Intl.NumberFormat();
+  const fmt1 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+
+  // fmtBytes gives a size in bytes with a binary unit: 1.2 MiB.
+  function fmtBytes(n) {
+    n = n || 0;
+    const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? fmt.format(n) : fmt1.format(n)) + " " + units[i];
+  }
   const state = {
     info: null,
     range: "1h",
@@ -403,6 +413,9 @@
       $("t-" + k).textContent = fmt.format(range.totals[k]);
       $("s-" + k).textContent = fmt.format(total.totals[k]) + " since start";
     }
+    $("t-bytes").textContent = fmtBytes(range.totals.bytes);
+    $("t-bytes").title = fmt.format(range.totals.bytes || 0) + " bytes";
+    $("s-bytes").textContent = fmtBytes(total.totals.bytes) + " since start";
   }
 
   function cell(text, cls) { return el("td", cls, text); }
@@ -416,7 +429,7 @@
       const key = el("span", "key-line");
       key.style.background = srcColors.get(s.id).color;
       name.append(key, document.createTextNode(s.id));
-      tr.append(name, cell(s.type, "muted"), cell(fmt.format(c.lines || 0), "num"), cell(fmt.format(c.events || 0), "num"),
+      tr.append(name, cell(s.type, "muted"), cell(fmt.format(c.lines || 0), "num"), cell(fmtBytes(c.bytes), "num"), cell(fmt.format(c.events || 0), "num"),
         cell(fmt.format(c.unparsed || 0), "num"), cell(fmt.format(c.excluded || 0), "num"));
       return tr;
     });

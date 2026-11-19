@@ -397,6 +397,7 @@ type item struct {
 	in       *input
 	ev       *event.Event // nil for an empty line or a change of positions
 	line     bool         // a line was read (maybe empty)
+	size     int          // its size, end of line included
 	unparsed bool         // the line did not match the regexp
 	key      string
 	position any
@@ -467,7 +468,7 @@ func (e *Engine) Run(ctx context.Context) error {
 			defer it.done()
 		}
 		if it.line {
-			e.stats.Line(it.in.source.Name(), it.ev != nil && !it.unparsed, it.unparsed)
+			e.stats.Line(it.in.source.Name(), it.size, it.ev != nil && !it.unparsed, it.unparsed)
 		}
 		if it.ev == nil {
 			return
@@ -635,7 +636,8 @@ func (e *Engine) read(ctx context.Context, in *input, events chan<- item) error 
 			continue
 		}
 		n := in.lines.Add(1)
-		it := item{in: in, key: rec.PositionKey, position: rec.Position, done: rec.Done, line: true}
+		it := item{in: in, key: rec.PositionKey, position: rec.Position, done: rec.Done, line: true,
+			size: len(rec.Data) + 1} // the end of line was removed
 		if len(rec.Data) > 0 {
 			ev, err := in.parser.Parse(rec)
 			if err != nil {

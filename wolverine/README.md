@@ -1119,6 +1119,9 @@ Every endpoint is a `GET` and returns JSON. Times are given as RFC 3339
 
 **`/stats`** gives `totals`, `sources` (by id) and `rules` (by id).
 
+- `bytes` is the amount of log processed: the size of the lines read, each
+  with its end of line (uncompressed, for a compressed file or object).
+
 - An interval counts the minutes that start in `[from, to)`: `from` is
   rounded down to the minute.
 - `available_since` is the start of the oldest minute kept. An interval that
@@ -1127,8 +1130,8 @@ Every endpoint is a `GET` and returns JSON. Times are given as RFC 3339
 ```console
 $ curl -s 'localhost:8080/api/v1/stats?from=-1h'
 {"from":"…","to":"…","since_start":false,"available_since":"…",
- "totals":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"matches":341,"alerts":4},
- "sources":{"ssh":{"lines":5120,"events":5087,"unparsed":33,"excluded":12}},
+ "totals":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"bytes":614400,"matches":341,"alerts":4},
+ "sources":{"ssh":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"bytes":614400}},
  "rules":{"ssh-failed-logins-per-ip":{"matches":341,"alerts":4}}}
 ```
 
@@ -1230,7 +1233,8 @@ data: {"AlertID":"5b4c…","RuleID":"ssh-failed-logins-per-ip","Time":"…","Act
 The dashboard at `/` shows, for the range selected (5 minutes to 24
 hours), refreshed every 10 s to 1 min:
 
-- **Stat panels:** the six counters over the range and since the start.
+- **Stat panels:** the counters over the range and since the start, and
+  the log volume processed (the size of the lines read, uncompressed).
 - **Charts:** log lines (parsed and unparsed), alerts by rule, rule matches,
   and lines by source. Hover a chart, or focus it and use the arrow keys,
   for the values.

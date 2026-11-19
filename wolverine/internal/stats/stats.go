@@ -27,6 +27,9 @@ type Source struct {
 	// Excluded are the events dropped by the source's exclude lists and
 	// exclude_if.
 	Excluded int64 `json:"excluded"`
+	// Bytes is the size of the lines read, each with its end of line: the
+	// amount of log processed (uncompressed, for the compressed files).
+	Bytes int64 `json:"bytes"`
 }
 
 func (s *Source) add(o *Source) {
@@ -34,6 +37,7 @@ func (s *Source) add(o *Source) {
 	s.Events += o.Events
 	s.Unparsed += o.Unparsed
 	s.Excluded += o.Excluded
+	s.Bytes += o.Bytes
 }
 
 // Rule counts what a rule did.
@@ -151,13 +155,15 @@ func (s *Store) record(f func(*Counts)) {
 	f(s.total)
 }
 
-// Line counts a line read by a source: parsed by its regexp, unparsed, or
-// neither (empty).
-func (s *Store) Line(source string, parsed, unparsed bool) {
+// Line counts a line read by a source, of size bytes: parsed by its regexp,
+// unparsed, or neither (empty).
+func (s *Store) Line(source string, size int, parsed, unparsed bool) {
 	s.record(func(c *Counts) {
 		src := c.source(source)
 		src.Lines++
 		c.Totals.Lines++
+		src.Bytes += int64(size)
+		c.Totals.Bytes += int64(size)
 		if parsed {
 			src.Events++
 			c.Totals.Events++

@@ -922,7 +922,8 @@ func TestRunStatsAndWatch(t *testing.T) {
 		t.Error("the channel should be closed when Run returns")
 	}
 	tot := eng.Stats().Total()
-	if tot.Totals != (stats.Totals{Source: stats.Source{Lines: 6, Events: 4, Unparsed: 1, Excluded: 1}, Rule: stats.Rule{Matches: 3, Alerts: 1}}) {
+	fi, _ := os.Stat(path) // every line ends with a newline: the bytes are the file size
+	if tot.Totals != (stats.Totals{Source: stats.Source{Lines: 6, Events: 4, Unparsed: 1, Excluded: 1, Bytes: fi.Size()}, Rule: stats.Rule{Matches: 3, Alerts: 1}}) {
 		t.Errorf("totals: %+v", tot.Totals)
 	}
 	if *tot.Rules["idle"] != (stats.Rule{}) || tot.Rules["r"].Matches != 3 {
