@@ -124,6 +124,8 @@ type Source struct {
 
 	// logfile and aws-s3. TimestampFormats parse the "timestamp" group:
 	// rfc3164, rfc3339 or a Go time layout. Default: [rfc3164, rfc3339].
+	// Without a timestamp, the "date" and "time" groups joined by a space
+	// are parsed with them, then as an ISO date and time.
 	TimestampFormats []string `yaml:"timestamp_formats"`
 	// Timezone for timestamps without one (default: local time).
 	Timezone string `yaml:"timezone"`

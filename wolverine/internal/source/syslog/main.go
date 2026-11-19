@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -36,13 +37,16 @@ var ErrNoMatch = errors.New("line does not match the regexp")
 // Named groups of the regexp fill the Event fields of the same name (see
 // parser.SetField). "timestamp" is parsed with TimestampFormats and "pri"
 // (syslog priority) sets Severity and the "facility" field. Any other named
-// group is stored in Event.Fields.
+// group is stored in Event.Fields. When "timestamp" is missing or empty,
+// "date" and "time" (both set) give the event time instead: they are joined
+// by a space and parsed with TimestampFormats, then with DateTimeLayouts.
 
 // Parser parses lines with a regular expression. It implements
 // parser.Parser.
 //
 // The "message" group sets Event.Message; without it, the whole line is the
-// message. Without a "timestamp" group, the time the line was read is used.
+// message. Without a "timestamp" group (or "date" and "time" groups), the
+// time the line was read is used.
 type Parser struct {
 	Regexp   *regexp.Regexp
 	Category string
@@ -68,6 +72,12 @@ func TimestampLayout(format string) (string, error) {
 		return format, nil
 	}
 }
+
+// DateTimeLayouts are tried, after the TimestampFormats, on the "date" and
+// "time" groups joined by a space: an ISO date and a time, such as
+// "2026-11-08 10:12:01" in the CloudFront and W3C (IIS) logs. A fractional
+// second is accepted.
+var DateTimeLayouts = []string{"2006-01-02 15:04:05", "2006-01-02 15:04:05Z07:00"}
 
 func (p *Parser) Name() string { return "regexp" }
 
@@ -96,7 +106,7 @@ func (p *Parser) Parse(rec *source.Record) (*event.Event, error) {
 		return ev, ErrNoMatch
 	}
 
-	var ts string
+	var ts, date, clock string
 	for i, name := range p.Regexp.SubexpNames() {
 		if name == "" {
 			continue
@@ -107,6 +117,12 @@ func (p *Parser) Parse(rec *source.Record) (*event.Event, error) {
 			ev.Message = v
 		case "timestamp":
 			ts = v
+		case "date":
+			date = v
+			parser.SetField(ev, name, v)
+		case "time":
+			clock = v
+			parser.SetField(ev, name, v)
 		case "pri":
 			if pri, err := strconv.Atoi(v); err == nil && pri >= 0 && pri <= 191 {
 				ev.Severity, _ = parser.Severity(pri % 8)
@@ -117,8 +133,11 @@ func (p *Parser) Parse(rec *source.Record) (*event.Event, error) {
 		}
 	}
 
-	if ts != "" {
+	if ts != "" || (date != "" && clock != "") {
 		t, err := p.parseTime(ts)
+		if ts == "" {
+			t, err = p.parseDateTime(date, clock)
+		}
 		if err != nil {
 			ev.Fields["parse_error"] = err.Error()
 			return ev, err
@@ -129,11 +148,31 @@ func (p *Parser) Parse(rec *source.Record) (*event.Event, error) {
 }
 
 func (p *Parser) parseTime(s string) (time.Time, error) {
+	if t, ok := p.parse(s, p.TimestampFormats); ok {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("timestamp %q does not match %v", s, p.TimestampFormats)
+}
+
+// parseDateTime parses the "date" and "time" groups, joined by a space.
+func (p *Parser) parseDateTime(date, clock string) (time.Time, error) {
+	s := date + " " + clock
+	if t, ok := p.parse(s, p.TimestampFormats); ok {
+		return t, nil
+	}
+	if t, ok := p.parse(s, DateTimeLayouts); ok {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("date and time %q do not match %v", s, append(slices.Clip(p.TimestampFormats), DateTimeLayouts...))
+}
+
+// parse parses s with the first format that matches it.
+func (p *Parser) parse(s string, formats []string) (time.Time, bool) {
 	loc := p.Location
 	if loc == nil {
 		loc = time.Local
 	}
-	for _, f := range p.TimestampFormats {
+	for _, f := range formats {
 		layout, err := TimestampLayout(f)
 		if err != nil {
 			continue
@@ -145,9 +184,9 @@ func (p *Parser) parseTime(s string) (time.Time, error) {
 		if t.Year() == 0 {
 			t = p.withYear(t, loc)
 		}
-		return t, nil
+		return t, true
 	}
-	return time.Time{}, fmt.Errorf("timestamp %q does not match %v", s, p.TimestampFormats)
+	return time.Time{}, false
 }
 
 // withYear sets the year of a date that has none: the current year, unless

@@ -244,6 +244,7 @@ named groups `(?P<name>...)` fill the event:
 | Group | Fills |
 |---|---|
 | `timestamp` | the event time, parsed with `timestamp_formats` (without it, the time the line was read) |
+| `date` and `time` | the event time when there is no `timestamp` (or it is empty): see below. Also stored in `Fields` |
 | `pri` | the syslog priority `<34>`: the severity and `facility` |
 | `message` | the message (without it, the whole line) |
 | `hostname`, `service`, `category`, `severity`, `source_ip`, `dest_ip`, `username`, `action`, `status` | the event field of the same name |
@@ -256,6 +257,24 @@ named groups `(?P<name>...)` fill the event:
 - `rfc3339`: `2026-11-08T10:12:01.123+01:00`.
 - A [Go time layout](https://pkg.go.dev/time#pkg-constants), for example
   `"02/Jan/2006:15:04:05 -0700"` for Apache and nginx logs.
+
+Some logs give the date and the time in two columns instead of a timestamp,
+such as the CloudFront and the W3C (IIS) logs. When the `timestamp` group is
+missing or empty, and the `date` and `time` groups are both set, they are
+joined by a space (`2026-11-08 10:12:01`) and parsed with
+`timestamp_formats`, then with the built-in layouts `2006-01-02 15:04:05` and
+`2006-01-02 15:04:05Z07:00` (a fractional second is accepted). So an ISO date
+and time need no `timestamp_formats`; another format needs a layout for the
+joined value, such as `"01/02/2006 15:04"`:
+
+```yaml
+- id: cloudfront
+  type: aws-s3
+  # ...
+  skip_lines: 2       # the #Version and #Fields lines
+  regexp: '^(?P<date>\S+)\t(?P<time>\S+)\t\S+\t\S+\t(?P<source_ip>\S+)\t(?P<method>\S+)\t\S+\t(?P<path>\S+)\t(?P<status>\d+)'
+  timezone: UTC       # CloudFront writes UTC times
+```
 
 Lines that do not match the regexp are kept as events with a `parse_error`
 field. The first 10 are logged; with `-v -v`, all of them are.

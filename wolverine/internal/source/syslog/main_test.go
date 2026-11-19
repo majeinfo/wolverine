@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +119,55 @@ func TestParseCustomFormat(t *testing.T) {
 	// No message group: the message is the whole line.
 	if ev.Message != ev.Raw {
 		t.Errorf("message = %q, want the whole line", ev.Message)
+	}
+}
+
+// Without a timestamp, the date and time groups give the event time.
+func TestParseDateTime(t *testing.T) {
+	// A CloudFront log line (tab-separated, UTC).
+	cloudfront := regexp.MustCompile(`^(?P<date>\S+)\t(?P<time>\S+)\t\S+\t\S+\t(?P<source_ip>\S+)\t(?P<method>\S+)`)
+	utc := &Parser{Regexp: cloudfront, TimestampFormats: []string{"rfc3164", "rfc3339"}, Location: time.UTC}
+	ev, err := utc.Parse(rec("2026-11-08\t10:12:01\tCDG50-C1\t512\t203.0.113.7\tGET"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 11, 8, 10, 12, 1, 0, time.UTC); !ev.Timestamp.Equal(want) || ev.SourceIP != "203.0.113.7" {
+		t.Errorf("event: %+v", ev)
+	}
+	if ev.Fields["date"] != "2026-11-08" || ev.Fields["time"] != "10:12:01" {
+		t.Errorf("date and time fields: %v", ev.Fields)
+	}
+
+	// A fractional second and a timezone are accepted by the built-in layouts.
+	both := regexp.MustCompile(`^(?:(?P<timestamp>\S+T\S+) )?(?P<date>\S+) (?P<time>\S+) (?P<message>.*)$`)
+	p := &Parser{Regexp: both, TimestampFormats: []string{"rfc3339"}, Location: time.UTC}
+	ev, err = p.Parse(rec("2026-11-08 10:12:01.250+01:00 msg"))
+	if want := time.Date(2026, 11, 8, 9, 12, 1, 250e6, time.UTC); err != nil || !ev.Timestamp.Equal(want) {
+		t.Errorf("fractional second and timezone: %v, %v", err, ev.Timestamp)
+	}
+	// The timestamp wins over the date and time.
+	ev, err = p.Parse(rec("2026-11-09T00:00:00Z 2026-11-08 10:12:01 msg"))
+	if want := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC); err != nil || !ev.Timestamp.Equal(want) {
+		t.Errorf("timestamp first: %v, %v", err, ev.Timestamp)
+	}
+
+	// A timestamp format applies to the date and time joined by a space.
+	us := &Parser{Regexp: cloudfront, TimestampFormats: []string{"01/02/2006 15:04"}, Location: time.UTC}
+	ev, err = us.Parse(rec("11/08/2026\t10:12\tx\t1\t203.0.113.7\tGET"))
+	if want := time.Date(2026, 11, 8, 10, 12, 0, 0, time.UTC); err != nil || !ev.Timestamp.Equal(want) {
+		t.Errorf("custom format: %v, %v", err, ev.Timestamp)
+	}
+
+	// Unparsable: an error, as for a bad timestamp.
+	if _, err := utc.Parse(rec("08.11.2026\t10:12:01\tx\t1\t203.0.113.7\tGET")); err == nil || !strings.Contains(err.Error(), `date and time "08.11.2026 10:12:01" do not match`) {
+		t.Errorf("bad date: %v", err)
+	}
+
+	// The date alone does not give the time: the read time is kept.
+	dateOnly := &Parser{Regexp: regexp.MustCompile(`^(?P<date>\S+) (?P<message>.*)$`), TimestampFormats: []string{"rfc3339"}}
+	r := rec("2026-11-08 msg")
+	if ev, err := dateOnly.Parse(r); err != nil || !ev.Timestamp.Equal(r.Timestamp) {
+		t.Errorf("date only: %v, %v", err, ev.Timestamp)
 	}
 }
 
