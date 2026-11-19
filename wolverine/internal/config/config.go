@@ -28,6 +28,15 @@ type Config struct {
 	// (events counted, suppressions) and the alerts raised are kept, at
 	// most. Zero: DefaultMaxLifetime.
 	MaxLifetime time.Duration `yaml:"max_lifetime"`
+	// LogTTL is how long the log lines (the events) counted by the rules
+	// and those of the alerts are kept: after it, an event counted keeps
+	// only its time, and an alert only its last event. Zero: DefaultLogTTL.
+	LogTTL time.Duration `yaml:"log_ttl"`
+	// MemoryLimit is the percentage of the memory (of the machine, or of
+	// the cgroup if lower) wolverine may use: above it, the least recently
+	// memorized log lines, then events and alerts, are forgotten. Nil:
+	// DefaultMemoryLimit; 0: no limit.
+	MemoryLimit *int `yaml:"memory_limit"`
 	// HTTP configures the embedded web server (REST API and dashboard).
 	HTTP HTTP `yaml:"http"`
 	// IncludeDir is a directory of additional configuration files, relative
@@ -69,6 +78,13 @@ type HTTP struct {
 
 // DefaultMaxLifetime is the maximum lifetime when max_lifetime is not set.
 const DefaultMaxLifetime = 24 * time.Hour
+
+// DefaultLogTTL is the TTL of the log lines when log_ttl is not set.
+const DefaultLogTTL = time.Hour
+
+// DefaultMemoryLimit is the memory limit, in percent, when memory_limit is
+// not set.
+const DefaultMemoryLimit = 60
 
 // DefaultIncludeDir is the include directory used when the main file does
 // not set include_dir.
@@ -292,9 +308,9 @@ type Match struct {
 // Load reads the main configuration file, then the *.yaml and *.yml files of
 // its include directory in lexical order. The exclude lists, sources, actions
 // and rules of the included files are added to those of the main file;
-// state_file, max_lifetime, http and include_dir may only be set in the main
-// file. Unknown keys
-// are rejected so that typos do not silently disable part of a rule.
+// state_file, max_lifetime, log_ttl, memory_limit, http and include_dir may
+// only be set in the main file. Unknown keys are rejected so that typos do
+// not silently disable part of a rule.
 func Load(path string) (*Config, error) {
 	cfg, global, err := loadFile(path, nil)
 	if err != nil {
@@ -326,8 +342,8 @@ func Load(path string) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		if part.StateFile != "" || part.MaxLifetime != 0 || part.HTTP != (HTTP{}) || part.IncludeDir != nil {
-			return nil, fmt.Errorf("%s: state_file, max_lifetime, http and include_dir are only allowed in the main configuration file %s", f, path)
+		if part.StateFile != "" || part.MaxLifetime != 0 || part.LogTTL != 0 || part.MemoryLimit != nil || part.HTTP != (HTTP{}) || part.IncludeDir != nil {
+			return nil, fmt.Errorf("%s: state_file, max_lifetime, log_ttl, memory_limit, http and include_dir are only allowed in the main configuration file %s", f, path)
 		}
 		if err := ids.add(part, f); err != nil {
 			return nil, err

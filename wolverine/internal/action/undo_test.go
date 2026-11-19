@@ -289,3 +289,26 @@ func (b *blocking) Execute(context.Context, *event.Alert) error {
 	})
 	return nil
 }
+
+// An undo keeps only the last event of its alert: what the undo actions
+// use, rather than every log line until it runs.
+func TestSchedulerKeepsTheLastEvent(t *testing.T) {
+	s := NewScheduler(map[string]*Undo{"block": {After: time.Hour, Actions: []string{"unblock"}}}, map[string]Action{"unblock": &fake{id: "unblock"}})
+	a := &event.Alert{ID: "a1", RuleID: "ssh", Metadata: map[string]any{"value": "192.0.2.1", "count": 3},
+		Events: []*event.Event{{Raw: "one"}, {Raw: "two"}, {Raw: "three"}}}
+	s.Schedule("block", a)
+	p, _ := s.Pending()
+	if len(p) != 1 || len(p[0].Alert.Events) != 1 || p[0].Alert.Events[0].Raw != "three" || p[0].Alert.Count() != 3 {
+		t.Fatalf("pending: %+v", p[0].Alert)
+	}
+	if len(a.Events) != 3 {
+		t.Error("the alert was modified: the other actions use it")
+	}
+
+	// Restored from a state file written by an older version.
+	s2 := NewScheduler(map[string]*Undo{"block": {After: time.Hour, Actions: []string{"unblock"}}}, map[string]Action{"unblock": &fake{id: "unblock"}})
+	s2.Restore([]Pending{{Key: "k", Action: "block", Actions: []string{"unblock"}, Due: time.Now(), Alert: a}})
+	if p, changed := s2.Pending(); len(p) != 1 || len(p[0].Alert.Events) != 1 || !changed {
+		t.Errorf("restored: %+v %v", p, changed)
+	}
+}

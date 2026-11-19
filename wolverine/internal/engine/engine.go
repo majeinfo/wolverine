@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -56,6 +57,13 @@ type Engine struct {
 	// alerts raised are kept (from max_lifetime, DefaultMaxLifetime if not
 	// set). Run flushes them periodically.
 	MaxLifetime time.Duration
+	// LogTTL is how long the log lines counted by the rules and those of
+	// the alerts are kept (from log_ttl, DefaultLogTTL if not set). Run
+	// trims them periodically.
+	LogTTL time.Duration
+	// memory keeps the memory used under the quota of memory_limit (nil:
+	// no limit).
+	memory *memoryGuard
 
 	// Alerts receives every alert as a JSON line (nil: not written).
 	Alerts io.Writer
@@ -126,9 +134,32 @@ func New(cfg *config.Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	ttl := cfg.LogTTL
+	if ttl == 0 {
+		ttl = config.DefaultLogTTL
+	}
+	if ttl < 0 {
+		return nil, fmt.Errorf("log_ttl must be a positive duration (e.g. 1h)")
+	}
+	percent := config.DefaultMemoryLimit
+	if cfg.MemoryLimit != nil {
+		percent = *cfg.MemoryLimit
+	}
+	if percent < 0 || percent > 100 {
+		return nil, fmt.Errorf("memory_limit: %d: a percentage of the memory, from 1 to 100 (0: no limit)", percent)
+	}
+	memory, err := newMemoryGuard(percent)
+	if err != nil {
+		log.Printf("warning: no memory limit: %v", err)
+	}
 	describe(cfg)
 	verbose.Infof("maximum lifetime of the memorized data and alerts: %s", lifetime)
-	info := Info{MaxLifetime: lifetime.String()}
+	verbose.Infof("log lines kept for %s", ttl)
+	info := Info{MaxLifetime: lifetime.String(), LogTTL: ttl.String()}
+	if memory != nil {
+		info.MemoryLimit = fmt.Sprintf("%d%% (%s)", percent, formatBytes(memory.quota))
+		verbose.Infof("memory limit: %s", info.MemoryLimit)
+	}
 	var sourceIDs, ruleIDs []string
 	for _, in := range inputs {
 		sourceIDs = append(sourceIDs, in.source.Name())
@@ -149,6 +180,8 @@ func New(cfg *config.Config) (*Engine, error) {
 		stats:       stats.New(sourceIDs, ruleIDs),
 		info:        info,
 		MaxLifetime: lifetime,
+		LogTTL:      ttl,
+		memory:      memory,
 	}
 	e.info.Started = e.stats.Started()
 	e.undo.Report = e.recordAction
@@ -214,18 +247,38 @@ func expireInterval(lifetime time.Duration) time.Duration {
 // expire flushes the data memorized by the rules and the alerts raised
 // before cutoff.
 func (e *Engine) expire(cutoff time.Time) {
-	n := e.detector.Expire(cutoff)
-	a := e.history.expire(cutoff)
+	n := e.expireData(cutoff)
 	e.stats.Expire(cutoff)
-	if n > 0 || a > 0 {
-		verbose.Debugf("expired (memorized before %s): %d rule data, %d alerts", cutoff.Format(time.DateTime), n, a)
+	if n > 0 {
+		verbose.Debugf("expired (memorized before %s): %d rule data and alerts", cutoff.Format(time.DateTime), n)
 	}
+}
+
+// expireData forgets the data of the rules and the alerts memorized before
+// cutoff, and returns how many items were forgotten.
+func (e *Engine) expireData(cutoff time.Time) int {
+	return e.detector.Expire(cutoff) + e.history.expire(cutoff)
+}
+
+// trim forgets the log lines memorized before cutoff: the events counted by
+// the rules keep their time, the alerts their last event. It returns how
+// many log lines were forgotten.
+func (e *Engine) trim(cutoff time.Time) int {
+	n := e.detector.Trim(cutoff) + e.history.trim(cutoff)
+	if n > 0 {
+		verbose.Debugf("%d log lines memorized before %s forgotten", n, cutoff.Format(time.DateTime))
+	}
+	return n
 }
 
 // Info describes the engine: its sources and rules.
 type Info struct {
-	Started     time.Time    `json:"started"`
-	MaxLifetime string       `json:"max_lifetime"`
+	Started     time.Time `json:"started"`
+	MaxLifetime string    `json:"max_lifetime"`
+	LogTTL      string    `json:"log_ttl"`
+	// MemoryLimit is the percentage and the quota, e.g. "60% (9.4 GiB)";
+	// empty: no limit.
+	MemoryLimit string       `json:"memory_limit,omitempty"`
 	Sources     []SourceInfo `json:"sources"`
 	Rules       []RuleInfo   `json:"rules"`
 }
@@ -240,6 +293,20 @@ type RuleInfo struct {
 	Description string   `json:"description,omitempty"`
 	Severity    string   `json:"severity,omitempty"`
 	Actions     []string `json:"actions"`
+}
+
+func (e *Engine) lifetime() time.Duration {
+	if e.MaxLifetime <= 0 {
+		return config.DefaultMaxLifetime
+	}
+	return e.MaxLifetime
+}
+
+func (e *Engine) ttl() time.Duration {
+	if e.LogTTL <= 0 {
+		return config.DefaultLogTTL
+	}
+	return e.LogTTL
 }
 
 // Info describes the engine's sources and enabled rules.
@@ -435,6 +502,15 @@ func (e *Engine) Run(ctx context.Context) error {
 		close(events)
 	}()
 
+	if e.memory != nil {
+		debug.SetMemoryLimit(int64(e.memory.quota))
+		e.memory.ttl, e.memory.lifetime = e.ttl(), e.lifetime()
+		e.memory.trim, e.memory.expire = e.trim, e.expireData
+		memCtx, stopMemory := context.WithCancel(ctx)
+		defer stopMemory()
+		go e.memory.run(memCtx)
+	}
+
 	e.undo.Start()
 	dispatcher := action.NewDispatcher(ctx, e.routes, 100, e.undo, e.recordAction)
 	var alertEnc, eventEnc *json.Encoder
@@ -445,11 +521,8 @@ func (e *Engine) Run(ctx context.Context) error {
 		eventEnc = json.NewEncoder(e.Events)
 	}
 
-	lifetime := e.MaxLifetime
-	if lifetime <= 0 {
-		lifetime = config.DefaultMaxLifetime
-	}
-	expireTicker := time.NewTicker(expireInterval(lifetime))
+	lifetime, ttl := e.lifetime(), e.ttl()
+	expireTicker := time.NewTicker(min(expireInterval(lifetime), expireInterval(ttl)))
 	defer expireTicker.Stop()
 
 	var tick <-chan time.Time
@@ -514,6 +587,7 @@ loop:
 			e.saveState()
 		case now := <-expireTicker.C:
 			e.expire(now.Add(-lifetime))
+			e.trim(now.Add(-ttl))
 		case it, ok := <-events:
 			if !ok {
 				break loop

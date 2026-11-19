@@ -80,7 +80,7 @@ func (b *Body) Render(a *event.Alert, maxEvents int) ([]byte, error) {
 		"SourceIP":      "",
 		"Username":      "",
 		"Hostname":      "",
-		"Count":         len(a.Events),
+		"Count":         a.Count(),
 		"MoreEvents":    0,
 	}
 	if v, ok := a.Metadata["value"]; ok {

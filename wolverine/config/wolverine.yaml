@@ -57,6 +57,19 @@ state_file: /var/lib/wolverine/state.json
 # -max-lifetime option overrides it.
 max_lifetime: 24h
 
+# How long the log lines (raw line, message, fields) of the events counted
+# by the rules and of the alerts are kept in memory and in the state file
+# (wall clock). After it, an event counted keeps only its time (it still
+# counts) and an alert only its last event. Default: 1h; the -log-ttl option
+# overrides it.
+log_ttl: 1h
+
+# Percentage of the memory (of the machine, or of the cgroup if lower)
+# wolverine may use. Above it, the least recently memorized log lines, then
+# events and alerts, are forgotten until it uses less than 80% of it.
+# Default: 60; 0: no limit; the -memory-limit option overrides it.
+memory_limit: 60
+
 # Embedded web server: REST API (statistics, alerts, real-time watch) and a
 # dashboard, here on http://127.0.0.1:8080/. Off without listen. With
 # token_env, the API requires "Authorization: Bearer <token>", the value of
@@ -69,8 +82,8 @@ max_lifetime: 24h
 # this file. Every *.yaml and *.yml file in it is read, in lexical order
 # (10-ssh.yaml before 20-web.yaml), and its exclude lists, sources, actions
 # and rules are added to those of this file. Hidden files and subdirectories are
-# ignored; state_file, max_lifetime, http and include_dir can only be set
-# here.
+# ignored; state_file, max_lifetime, log_ttl, memory_limit, http and
+# include_dir can only be set here.
 # Without this setting, rules.d is used if it exists; "" disables it.
 include_dir: rules.d
 

@@ -138,7 +138,11 @@ func (e *Email) message(a *event.Alert, now time.Time) []byte {
 	}
 
 	if len(a.Events) > 0 {
-		fmt.Fprintf(&b, "\nEvents (%d):\n", len(a.Events))
+		if n := a.Count(); n > len(a.Events) {
+			fmt.Fprintf(&b, "\nEvents (%d, the last %d kept):\n", n, len(a.Events))
+		} else {
+			fmt.Fprintf(&b, "\nEvents (%d):\n", len(a.Events))
+		}
 		for i, ev := range a.Events {
 			if e.MaxEvents > 0 && i == e.MaxEvents {
 				fmt.Fprintf(&b, "  ... %d more\n", len(a.Events)-i)

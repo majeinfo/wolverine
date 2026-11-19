@@ -29,6 +29,7 @@ within 5 minutes.
   - [`exclude_if` conditions](#exclude_if-conditions)
   - [State file](#state-file)
   - [Maximum lifetime](#maximum-lifetime)
+  - [Log TTL and memory limit](#log-ttl-and-memory-limit)
 - [Web server, API and dashboard](#web-server-api-and-dashboard)
 - [Install as a service](#install-as-a-service)
 - [Project layout](#project-layout)
@@ -69,6 +70,8 @@ bin/wolverine -config config/wolverine.yaml
 | `-state FILE` | state file where the position of each source is saved; overrides `state_file` from the configuration. `-state none` disables it |
 | `-http ADDRESS` | run the [web server](#web-server-api-and-dashboard) (REST API and dashboard) on ADDRESS, e.g. `127.0.0.1:8080`; overrides `http.listen`. `-http none` disables it |
 | `-max-lifetime DURATION` | how long the data memorized by the rules and the alerts raised are kept, e.g. `12h`; overrides `max_lifetime` (default `24h`). See [maximum lifetime](#maximum-lifetime) |
+| `-log-ttl DURATION` | how long the log lines are kept in memory and in the state file, e.g. `30m`; overrides `log_ttl` (default `1h`). See [log TTL](#log-ttl-and-memory-limit) |
+| `-memory-limit PERCENT` | percentage of the memory wolverine may use; overrides `memory_limit` (default `60`, `0`: no limit). See [memory limit](#log-ttl-and-memory-limit) |
 | `-events FILE` | append every event, after parsing and enrichment, as a JSON line to FILE (`-` for stdout) |
 | `-detailed-events` | include in the alerts written to stdout the events (log lines) that raised them |
 | `-minimal-events` | include in the alerts written to stdout only the last event, the one that raised them |
@@ -112,6 +115,8 @@ The configuration is a main YAML file with these sections:
 exclude_lists: [...]     # named lists of IPs that rules can ignore
 state_file:    ...       # where the position of each source is saved
 max_lifetime:  24h       # how long rule data and alerts are kept in memory
+log_ttl:       1h        # how long the log lines are kept in memory
+memory_limit:  60        # percentage of the memory wolverine may use
 http:          {...}     # embedded web server: REST API and dashboard
 include_dir:   rules.d   # directory of additional configuration files
 sources:       [...]     # where events come from
@@ -144,8 +149,9 @@ of the file names. Prefix the names with numbers to choose the order:
   exclude list defined in another file, and a list can include a list of
   another file.
 - **Unique ids:** an id used twice is an error that names both files.
-- **Main file only:** `state_file`, `max_lifetime`, `http` and
-  `include_dir` can only be set in the main file.
+- **Main file only:** `state_file`, `max_lifetime`, `log_ttl`,
+  `memory_limit`, `http` and `include_dir` can only be set in the main
+  file.
 - **Location:** `include_dir` is relative to the main file's directory, or
   absolute.
   - Without `include_dir`, `rules.d` next to the main file is read if it
@@ -1056,6 +1062,59 @@ flushed suppression no longer silences its group.
 
 `-v -v` logs what is flushed.
 
+### Log TTL and memory limit
+
+```yaml
+log_ttl: 1h        # default
+memory_limit: 60   # percent; default
+```
+
+The events counted by the rules and the alerts carry their log lines
+(the raw line, the message, the fields). With many events, or a long
+`max_lifetime`, they would fill the memory and the state file. Two
+settings bound them.
+
+**`log_ttl`** is how long the log lines are kept, measured on the clock
+from the moment they were memorized:
+
+- An event counted by a rule keeps only its time after `log_ttl`: it still
+  counts toward the threshold, so the rules detect the same things. Only its
+  log line is forgotten.
+- An alert keeps only its last event after `log_ttl`, the one the actions
+  use and the dashboard shows. Its `Metadata.count` still gives how many
+  events raised it.
+- An alert raised from events whose log lines were forgotten has only the
+  events still kept; its `count` includes them all. An email then says
+  `Events (12, the last 5 kept)`, and the `Count` of a webhook body is the
+  full count.
+- A planned undo keeps only the last event of its alert, which is what the
+  undo actions use.
+- The state file saves what is in memory, so it shrinks the same way.
+
+The `-log-ttl` option overrides it, e.g. `-log-ttl 15m`.
+
+**`memory_limit`** is the percentage of the memory wolverine may use: of
+the machine, or of the memory limit of its cgroup (systemd `MemoryMax`, a
+container limit) if that is lower. `0` disables it.
+
+- The quota is given to the Go runtime as its soft memory limit, so the
+  garbage collector works harder as wolverine gets close to it.
+- Every second, wolverine checks the memory it uses. Above the quota, it
+  forgets the least recently memorized data, until it uses less than 80%
+  of the quota:
+  1. the log lines first, as `log_ttl` does, those memorized more than
+     half of `log_ttl` ago, then a quarter... then all of them;
+  2. only if that is not enough, the events counted and the alerts, as
+     `max_lifetime` does, the oldest first. The rules then count fewer
+     events: this is logged as a warning.
+- What was forgotten is logged (with `-v` when only log lines were).
+- On a system without `/proc/meminfo`, there is no limit: a warning says
+  so at startup.
+
+The `-memory-limit` option overrides it, e.g. `-memory-limit 40`.
+`/api/v1/info` gives both: `"log_ttl": "1h0m0s"` and
+`"memory_limit": "60% (4.5 GiB)"`.
+
 ## Web server, API and dashboard
 
 ```yaml
@@ -1108,7 +1167,7 @@ Every endpoint is a `GET` and returns JSON. Times are given as RFC 3339
 
 | Endpoint | Returns |
 |---|---|
-| `/api/v1/info` | the sources and enabled rules, the start time, `max_lifetime` |
+| `/api/v1/info` | the sources and enabled rules, the start time, `max_lifetime`, `log_ttl`, `memory_limit` |
 | `/api/v1/stats` | totals since the start |
 | `/api/v1/stats?from=-1h&to=now` | totals of an interval (`to` defaults to now) |
 | `/api/v1/stats/series?from=-6h&step=5m` | counters by time bucket |

@@ -148,7 +148,9 @@ func (s *Scheduler) Schedule(actionID string, a *event.Alert) {
 		Action:  actionID,
 		Actions: slices.Clone(u.Actions),
 		Due:     s.now().Add(u.After),
-		Alert:   a,
+		// Only the last event: what the undo actions use, rather than
+		// keeping every log line until the undo.
+		Alert: a.Trimmed(),
 	}
 	s.mu.Lock()
 	old, postponed := s.pending[p.Key]
@@ -219,6 +221,10 @@ func (s *Scheduler) Restore(pending []Pending) {
 			continue
 		}
 		p.Actions = ids
+		if t := p.Alert.Trimmed(); t != p.Alert { // saved by an older version
+			p.Alert = t
+			s.changed = true
+		}
 		s.pending[p.Key] = &p
 	}
 	if len(s.pending) > 0 {

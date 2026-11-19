@@ -1,6 +1,7 @@
 package detection
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -270,5 +271,52 @@ func TestSaveRestore(t *testing.T) {
 	}
 	if n, err := newRule().Restore([]byte("{"), time.Time{}); n != 0 || err == nil {
 		t.Errorf("invalid data: %d %v", n, err)
+	}
+}
+
+// Trim forgets the log lines memorized before the cutoff, but the rule still
+// counts their events; the alert has only the events kept.
+func TestTrim(t *testing.T) {
+	t0 := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	clock := t0
+	r := sshFailedLoginsPerIP(4, time.Hour)
+	r.Now = func() time.Time { return clock }
+
+	for i := range 3 { // memorized at t0, +1m, +2m
+		clock = t0.Add(time.Duration(i) * time.Minute)
+		r.Evaluate(failed("10.0.0.1", t0.Add(time.Duration(i)*time.Minute)))
+	}
+	if n := r.Trim(t0.Add(90 * time.Second)); n != 2 {
+		t.Fatalf("trimmed %d log lines, want 2", n)
+	}
+	if n := r.Trim(t0.Add(90 * time.Second)); n != 0 {
+		t.Errorf("trimmed again: %d", n)
+	}
+
+	// Saved and restored: the trimmed events keep their time.
+	data, changed, err := r.Save()
+	if err != nil || !changed {
+		t.Fatal(err, changed)
+	}
+	if strings.Count(string(data), `"event"`) != 1 || strings.Count(string(data), `"time"`) != 2 {
+		t.Errorf("saved: %s", data)
+	}
+	r2 := sshFailedLoginsPerIP(4, time.Hour)
+	r2.Now = r.Now
+	if n, err := r2.Restore(data, t0.Add(-time.Hour)); n != 3 || err != nil {
+		t.Fatalf("restored %d, %v", n, err)
+	}
+
+	for _, rule := range []*ThresholdRule{r, r2} {
+		clock = t0.Add(3 * time.Minute)
+		alerts := rule.Evaluate(failed("10.0.0.1", t0.Add(3*time.Minute)))
+		if len(alerts) != 1 {
+			t.Fatalf("got %d alerts, want 1: the trimmed events count", len(alerts))
+		}
+		a := alerts[0]
+		if len(a.Events) != 2 || a.Count() != 4 || !a.Events[0].Timestamp.Equal(t0.Add(2*time.Minute)) ||
+			!strings.Contains(a.Message, "4 events for SourceIP=10.0.0.1 within 3m0s") {
+			t.Errorf("alert: %d events, count %d, %q", len(a.Events), a.Count(), a.Message)
+		}
 	}
 }

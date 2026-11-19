@@ -83,7 +83,7 @@ func testAlert() *event.Alert {
 			{Raw: "Nov  8 10:00:01 h sshd[1]: Failed password for root from 203.0.113.7 port 2 ssh2"},
 			{Raw: "."},
 		},
-		Metadata: map[string]any{"value": "203.0.113.7", "count": 5},
+		Metadata: map[string]any{"value": "203.0.113.7", "count": 3},
 	}
 }
 
@@ -108,7 +108,7 @@ func TestExecute(t *testing.T) {
 		"Subject: [wolverine] [HIGH] Repeated failed SSH logins: 5 events for SourceIP=203.0.113.7\r\n",
 		"Message-ID: <abc123@wolverine>\r\n",
 		"Rule:     ssh-failed-logins-per-ip\r\n",
-		"  count: 5\r\n  value: 203.0.113.7\r\n",
+		"  count: 3\r\n  value: 203.0.113.7\r\n",
 		"Events (3):\r\n  Nov  8 10:00:00 h sshd[1]",
 		"  ... 1 more\r\n",
 		"QUIT",

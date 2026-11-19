@@ -19,6 +19,10 @@ type Rule interface {
 	// data outlives the maximum lifetime, and returns how many items were
 	// forgotten.
 	Expire(cutoff time.Time) int
+	// Trim forgets the log lines (the events) memorized before cutoff, but
+	// not what the rule needs to evaluate the next ones (their times), and
+	// returns how many were forgotten.
+	Trim(cutoff time.Time) int
 	// Save returns the data memorized by the rule, to restore after a
 	// restart, and whether it changed since the previous call (or since
 	// Restore).

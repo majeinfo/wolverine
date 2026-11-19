@@ -619,6 +619,42 @@ func TestCheckLifetime(t *testing.T) {
 	}
 }
 
+// log_ttl and memory_limit: defaults, checks, and Info.
+func TestLogTTLAndMemoryLimit(t *testing.T) {
+	pct := func(n int) *int { return &n }
+	for _, tt := range []struct {
+		ttl     time.Duration
+		limit   *int
+		want    string // error
+		info    string // LogTTL
+		hasMem  bool
+		memInfo string // prefix of MemoryLimit
+	}{
+		{0, nil, "", "1h0m0s", true, "60% ("},
+		{30 * time.Minute, pct(25), "", "30m0s", true, "25% ("},
+		{0, pct(0), "", "1h0m0s", false, ""},
+		{-time.Minute, nil, "log_ttl must be a positive duration", "", false, ""},
+		{0, pct(101), "memory_limit: 101: a percentage", "", false, ""},
+		{0, pct(-1), "memory_limit: -1: a percentage", "", false, ""},
+	} {
+		cfg := &config.Config{Sources: []config.Source{logfile("/var/log/messages")}, LogTTL: tt.ttl, MemoryLimit: tt.limit}
+		eng, err := New(cfg)
+		if tt.want != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("%+v: got %v, want %q", tt, err, tt.want)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		info := eng.Info()
+		if info.LogTTL != tt.info || (eng.memory != nil) != tt.hasMem || !strings.HasPrefix(info.MemoryLimit, tt.memInfo) || (tt.memInfo == "") != (info.MemoryLimit == "") {
+			t.Errorf("%+v: info %+v, memory %v", tt, info, eng.memory)
+		}
+	}
+}
+
 func TestExpireInterval(t *testing.T) {
 	for lifetime, want := range map[time.Duration]time.Duration{
 		5 * time.Second: time.Second,

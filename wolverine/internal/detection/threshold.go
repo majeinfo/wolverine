@@ -20,7 +20,9 @@ import (
 // group until Suppress has elapsed since the previous one.
 //
 // The events counted and the suppressions are also forgotten by Expire, once
-// they have been memorized for the maximum lifetime (wall clock).
+// they have been memorized for the maximum lifetime (wall clock). Trim
+// forgets the log lines of the events memorized for the log TTL, but keeps
+// their times: they are still counted.
 type ThresholdRule struct {
 	RuleID      string
 	Description string
@@ -45,9 +47,10 @@ type ThresholdRule struct {
 	changed bool
 }
 
-// memorized is an event counted by a rule, with the wall-clock time it was
-// memorized.
+// memorized is an event counted by a rule: its time, the event (nil once
+// trimmed), and the wall-clock time it was memorized.
 type memorized struct {
+	ts time.Time
 	ev *event.Event
 	at time.Time
 }
@@ -98,7 +101,7 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 	r.changed = true
 
 	now := r.now()
-	mems := append(evict(r.groups[key], ev.Timestamp.Add(-r.Window)), memorized{ev, now})
+	mems := append(evict(r.groups[key], ev.Timestamp.Add(-r.Window)), memorized{ev.Timestamp, ev, now})
 	verbose.Debugf("rule %s: %s=%s: %d/%d events within %s", r.RuleID, r.GroupBy, key, len(mems), r.Count, r.Window)
 	if len(mems) < r.Count {
 		r.groups[key] = mems
@@ -114,9 +117,12 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 		r.fired[key] = suppression{last: ev.Timestamp, at: now}
 	}
 
-	evs := make([]*event.Event, len(mems))
-	for i, m := range mems {
-		evs[i] = m.ev
+	// The events whose log line was trimmed are counted, not included.
+	evs := make([]*event.Event, 0, len(mems))
+	for _, m := range mems {
+		if m.ev != nil {
+			evs = append(evs, m.ev)
+		}
 	}
 
 	return true, []*event.Alert{{
@@ -125,12 +131,12 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 		Timestamp: ev.Timestamp,
 		Severity:  r.Severity,
 		Message: fmt.Sprintf("%s: %d events for %s=%s within %s",
-			r.Description, len(evs), r.GroupBy, key, evs[len(evs)-1].Timestamp.Sub(evs[0].Timestamp)),
+			r.Description, len(mems), r.GroupBy, key, mems[len(mems)-1].ts.Sub(mems[0].ts)),
 		Events: evs,
 		Metadata: map[string]any{
 			"group_by": r.GroupBy,
 			"value":    key,
-			"count":    len(evs),
+			"count":    len(mems),
 			"window":   r.Window.String(),
 		},
 	}}
@@ -139,7 +145,7 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 // evict drops the events older than cutoff (event time).
 func evict(mems []memorized, cutoff time.Time) []memorized {
 	i := 0
-	for i < len(mems) && mems[i].ev.Timestamp.Before(cutoff) {
+	for i < len(mems) && mems[i].ts.Before(cutoff) {
 		i++
 	}
 	return mems[i:]
@@ -177,6 +183,30 @@ func (r *ThresholdRule) Expire(cutoff time.Time) int {
 	return n
 }
 
+// Trim forgets the log lines (the events) memorized before cutoff (wall
+// clock), keeping their times, and returns how many were forgotten.
+func (r *ThresholdRule) Trim(cutoff time.Time) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, mems := range r.groups {
+		for i := range mems {
+			if !mems[i].at.Before(cutoff) {
+				break // memorized in order
+			}
+			if mems[i].ev != nil {
+				mems[i].ev = nil
+				n++
+			}
+		}
+	}
+	if n > 0 {
+		r.changed = true
+		verbose.Debugf("rule %s: %d log lines trimmed", r.RuleID, n)
+	}
+	return n
+}
+
 // thresholdData is the data of a ThresholdRule, as saved.
 type thresholdData struct {
 	Signature    string                      `json:"signature"`
@@ -184,9 +214,11 @@ type thresholdData struct {
 	Suppressions map[string]savedSuppression `json:"suppressions,omitempty"`
 }
 
+// savedEvent is an event counted; a trimmed one has only its Time.
 type savedEvent struct {
 	MemorizedAt time.Time    `json:"memorized_at"`
-	Event       *event.Event `json:"event"`
+	Event       *event.Event `json:"event,omitempty"`
+	Time        time.Time    `json:"time,omitzero"`
 }
 
 type savedSuppression struct {
@@ -206,7 +238,11 @@ func (r *ThresholdRule) Save() (json.RawMessage, bool, error) {
 		d.Groups = map[string][]savedEvent{}
 		for k, mems := range r.groups {
 			for _, m := range mems {
-				d.Groups[k] = append(d.Groups[k], savedEvent{m.at, m.ev})
+				s := savedEvent{MemorizedAt: m.at, Event: m.ev}
+				if m.ev == nil {
+					s.Time = m.ts
+				}
+				d.Groups[k] = append(d.Groups[k], s)
 			}
 		}
 	}
@@ -242,8 +278,14 @@ func (r *ThresholdRule) Restore(data json.RawMessage, cutoff time.Time) (int, er
 		total += len(saved)
 		var mems []memorized
 		for _, s := range saved {
-			if s.Event != nil && !s.MemorizedAt.Before(cutoff) {
-				mems = append(mems, memorized{s.Event, s.MemorizedAt})
+			if s.MemorizedAt.Before(cutoff) {
+				continue
+			}
+			switch {
+			case s.Event != nil:
+				mems = append(mems, memorized{s.Event.Timestamp, s.Event, s.MemorizedAt})
+			case !s.Time.IsZero():
+				mems = append(mems, memorized{s.Time, nil, s.MemorizedAt})
 			}
 		}
 		if len(mems) > 0 {

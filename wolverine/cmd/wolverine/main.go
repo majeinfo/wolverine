@@ -15,6 +15,16 @@
 // -max-lifetime DURATION overrides the max_lifetime of the configuration:
 // how long the data memorized by the rules and the alerts raised are kept.
 //
+// -log-ttl DURATION overrides the log_ttl of the configuration (default 1h):
+// how long the log lines are kept in memory (and in the state file). After
+// it, an event counted by a rule keeps only its time, and an alert only its
+// last event.
+//
+// -memory-limit PERCENT overrides the memory_limit of the configuration
+// (default 60): the percentage of the memory (of the machine, or of the
+// cgroup if lower) wolverine may use. Above it, the least recently
+// memorized log lines, then events and alerts, are forgotten. 0: no limit.
+//
 // -http ADDR overrides the http.listen of the configuration: the address of
 // the embedded web server (REST API and dashboard); "-http none" disables
 // it. When it runs, wolverine keeps serving after reading sources that are
@@ -48,6 +58,8 @@ func main() {
 	eventsPath := flag.String("events", "", "append every parsed event as a JSON line to this `file` (\"-\": stdout)")
 	detailedEvents := flag.Bool("detailed-events", false, "include in the alerts written to stdout the events (log lines) that raised them")
 	maxLifetime := flag.Duration("max-lifetime", 0, "how long the data memorized by the rules (events counted, suppressions) and the alerts raised are kept, e.g. 12h, overriding max_lifetime (default 24h)")
+	logTTL := flag.Duration("log-ttl", 0, "how long the log lines are kept in memory and in the state file, e.g. 30m, overriding log_ttl (default 1h); after it, an event counted keeps only its time and an alert its last event")
+	memoryLimit := flag.Int("memory-limit", -1, "`percentage` of the memory (of the machine, or of the cgroup if lower) wolverine may use, overriding memory_limit (default 60); above it, the oldest log lines, then events and alerts, are forgotten. 0: no limit")
 	httpAddr := flag.String("http", "", "`address` of the web server (REST API and dashboard), e.g. 127.0.0.1:8080, overriding http.listen (\"none\": no web server)")
 	minimalEvents := flag.Bool("minimal-events", false, "include in the alerts written to stdout the last event (log line) that raised them")
 	flag.Parse()
@@ -77,6 +89,18 @@ func main() {
 	}
 	if *maxLifetime > 0 {
 		cfg.MaxLifetime = *maxLifetime
+	}
+	if *logTTL < 0 {
+		log.Fatal("-log-ttl must be a positive duration")
+	}
+	if *logTTL > 0 {
+		cfg.LogTTL = *logTTL
+	}
+	if *memoryLimit > 100 || *memoryLimit < -1 {
+		log.Fatal("-memory-limit: a percentage, from 0 (no limit) to 100")
+	}
+	if *memoryLimit >= 0 {
+		cfg.MemoryLimit = memoryLimit
 	}
 	switch *httpAddr {
 	case "":
