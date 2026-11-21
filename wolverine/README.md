@@ -687,8 +687,9 @@ CloudFront distribution.
 - id: waf-block
   type: aws-waf-ipset
   ipset:
-    name: wolverine-blocklist
+    name: wolverine-blocklist                   # an IPv4 IP set
     id: 1a2b3c4d-5678-90ab-cdef-111122223333   # optional: looked up by name
+    ipv6_name: wolverine-blocklist-v6           # optional: an IPv6 IP set
     scope: REGIONAL            # default; CLOUDFRONT for CloudFront
   aws:                         # as for an aws-s3 source
     region: eu-west-3
@@ -702,6 +703,7 @@ CloudFront distribution.
   type: aws-waf-ipset
   ipset:
     name: wolverine-blocklist
+    ipv6_name: wolverine-blocklist-v6
     operation: remove
   aws:
     region: eu-west-3
@@ -713,6 +715,8 @@ CloudFront distribution.
 |---|---|
 | `ipset.name` | the name of the IP set (required) |
 | `ipset.id` | its id. Without it, the IP set is looked up by name the first time the action runs |
+| `ipset.ipv6_name` | the IP set of the IPv6 addresses; `name` is then the IP set of the IPv4 ones. Without it, every address goes to `name` |
+| `ipset.ipv6_id` | the id of the IPv6 IP set. Without it, it is looked up by name |
 | `ipset.scope` | `REGIONAL` (default) or `CLOUDFRONT`. CloudFront IP sets are in `us-east-1`, used when `aws.region` is not set |
 | `ipset.operation` | `add` (default) or `remove` |
 | `ipset.field` | the event field holding the address, in the last event of the alert (default `SourceIP`), e.g. a `client_ip` group behind a proxy |
@@ -737,9 +741,13 @@ an [`aws-s3` source](#aws-s3-log-files-written-to-an-s3-bucket).
   action an [`undo`](#undoing-an-action) that runs an `aws-waf-ipset`
   action with `operation: remove` on the same IP set, as above.
 - **Addresses:** the address is added as `192.0.2.7/32` (IPv4) or
-  `2001:db8::1/128` (IPv6). An IP set holds one IP version: an address of
-  the other one makes the action fail. A value that is not an IP address
-  fails too, and nothing is changed.
+  `2001:db8::1/128` (IPv6). An IP set holds one IP version (IPv4 or IPv6),
+  chosen when it is created: to block both, create an IPv4 and an IPv6 IP
+  set, give them as `name` and `ipv6_name`, and block both in the web ACL.
+  An address that does not fit its IP set (an IPv6 address without
+  `ipv6_name`) makes the action fail, and the error says what to set. An
+  IPv4-mapped address (`::ffff:192.0.2.7`) is an IPv4 one. A value that is
+  not an IP address fails too, and nothing is changed.
 - **Idempotent:** adding an address already in the set, or removing one that
   is not in it, changes nothing. `remove` only removes that exact address,
   not a range that contains it.
@@ -753,14 +761,15 @@ an [`aws-s3` source](#aws-s3-log-files-written-to-an-s3-bucket).
   `exclude` list of the addresses that must never be blocked.
 
 The IAM policy needs `wafv2:GetIPSet` and `wafv2:UpdateIPSet` on the IP
-set, and `wafv2:ListIPSets` if `id` is not set:
+sets (both, with `ipv6_name`), and `wafv2:ListIPSets` if an id is not set:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {"Effect": "Allow", "Action": ["wafv2:GetIPSet", "wafv2:UpdateIPSet"],
-     "Resource": "arn:aws:wafv2:eu-west-3:123456789012:regional/ipset/wolverine-blocklist/*"},
+     "Resource": ["arn:aws:wafv2:eu-west-3:123456789012:regional/ipset/wolverine-blocklist/*",
+                  "arn:aws:wafv2:eu-west-3:123456789012:regional/ipset/wolverine-blocklist-v6/*"]},
     {"Effect": "Allow", "Action": "wafv2:ListIPSets", "Resource": "*"}
   ]
 }

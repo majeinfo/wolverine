@@ -226,6 +226,11 @@ type WAFIPSet struct {
 	Name string `yaml:"name"`
 	// ID of the IP set. Default: looked up by name.
 	ID string `yaml:"id"`
+	// IPv6Name is the IP set of the IPv6 addresses: an IP set holds one IP
+	// version, so with it Name is for the IPv4 ones. Default: Name.
+	IPv6Name string `yaml:"ipv6_name"`
+	// IPv6ID is the id of the IPv6 IP set. Default: looked up by name.
+	IPv6ID string `yaml:"ipv6_id"`
 	// Scope is REGIONAL (default: ALB, API Gateway...) or CLOUDFRONT.
 	Scope string `yaml:"scope"`
 	// Operation is add (default) or remove, e.g. in the undo of an add.

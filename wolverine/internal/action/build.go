@@ -200,6 +200,12 @@ func buildWAFIPSet(c config.Action) (Action, error) {
 	if s.Name == "" {
 		return nil, fmt.Errorf("ipset.name is required")
 	}
+	switch {
+	case s.IPv6ID != "" && s.IPv6Name == "":
+		return nil, fmt.Errorf("ipset.ipv6_id requires ipset.ipv6_name")
+	case s.IPv6Name != "" && s.IPv6Name == s.Name:
+		return nil, fmt.Errorf("ipset.ipv6_name: the IPv6 IP set must be another IP set than ipset.name (an IP set holds one IP version)")
+	}
 	var remove bool
 	switch s.Operation {
 	case "", "add":
@@ -245,7 +251,11 @@ func buildWAFIPSet(c config.Action) (Action, error) {
 			o.BaseEndpoint = aws.String(awsCfg.EndpointURL)
 		}
 	})
-	return awswaf.New(c.ID, client, s.Name, s.ID, scope, field, remove, s.Timeout), nil
+	a := awswaf.New(c.ID, client, s.Name, s.ID, scope, field, remove, s.Timeout)
+	if s.IPv6Name != "" {
+		a.WithIPv6(s.IPv6Name, s.IPv6ID)
+	}
+	return a, nil
 }
 
 // Routes maps each enabled rule id to the actions it triggers.

@@ -7,7 +7,8 @@
 # only in that file. $${ gives a literal ${. year, month, day, hour, minute
 # and second are the date macros of the paths, not variables.
 variables:
-  waf_ipset: wolverine-blocklist
+  waf_ipset: wolverine-blocklist        # an IPv4 IP set
+  waf_ipset_v6: wolverine-blocklist-v6  # an IPv6 IP set
   waf_aws:
     region: eu-west-3
     # profile: wolverine
@@ -261,7 +262,9 @@ actions:
 
   # Add the source IP of the alert to an AWS WAF (v2) IP set, blocked by a
   # rule of a web ACL, and remove it an hour later (waf-unblock). The IP set
-  # is looked up by name unless ipset.id is set. Credentials and region in
+  # is looked up by name unless ipset.id is set. An IP set holds one IP
+  # version: the IPv6 addresses go to the IP set of ipv6_name (without it,
+  # they make the action fail). Credentials and region in
   # aws, as for the aws-s3 source: keys in environment variables, a profile,
   # or the AWS SDK's defaults (see the README for the IAM policy).
   - id: waf-block
@@ -269,6 +272,7 @@ actions:
     disabled: true
     ipset:
       name: ${waf_ipset}
+      ipv6_name: ${waf_ipset_v6}
       scope: REGIONAL            # or CLOUDFRONT (us-east-1)
     aws: ${waf_aws}              # see variables, at the top
     undo:
@@ -281,6 +285,7 @@ actions:
     disabled: true
     ipset:
       name: ${waf_ipset}
+      ipv6_name: ${waf_ipset_v6}
       operation: remove
     aws: ${waf_aws}
 

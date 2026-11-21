@@ -237,6 +237,14 @@ func TestBuildWAFIPSet(t *testing.T) {
 	if w := a.(*awswaf.IPSet); w.Scope != "CLOUDFRONT" || !w.Remove || w.Field != "client_ip" {
 		t.Errorf("cloudfront: %+v", w)
 	}
+	// An IP set for the IPv6 addresses.
+	a, err = build(cfg(func(c *config.Action) { c.IPSet.IPv6Name, c.IPSet.IPv6ID = "blocklist6", "id6" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := a.(*awswaf.IPSet); w.SetName != "blocklist" || w.IPv6SetName != "blocklist6" {
+		t.Errorf("ipv6_name: %+v", w)
+	}
 
 	for _, tt := range []struct {
 		mod  func(*config.Action)
@@ -245,6 +253,8 @@ func TestBuildWAFIPSet(t *testing.T) {
 		{func(c *config.Action) { c.IPSet.Name = "" }, "ipset.name is required"},
 		{func(c *config.Action) { c.IPSet.Operation = "delete" }, `ipset.operation "delete": add or remove`},
 		{func(c *config.Action) { c.IPSet.Scope = "GLOBAL" }, `ipset.scope "GLOBAL"`},
+		{func(c *config.Action) { c.IPSet.IPv6ID = "id6" }, "ipset.ipv6_id requires ipset.ipv6_name"},
+		{func(c *config.Action) { c.IPSet.IPv6Name = "blocklist" }, "must be another IP set than ipset.name"},
 		{func(c *config.Action) { c.IPSet.Scope = "CLOUDFRONT" }, "the region must be us-east-1, not eu-west-3"},
 		{func(c *config.Action) { c.IPSet.Field = " SourceIP" }, "unexpected spaces"},
 		{func(c *config.Action) { c.AWS.Region = "" }, "aws: no region: set aws.region"},

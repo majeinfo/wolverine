@@ -38,27 +38,54 @@ type API interface {
 }
 
 // IPSet adds the address in Field of an alert's last event to an IP set
-// (Remove false), or removes it (Remove true).
+// (Remove false), or removes it (Remove true). An IP set holds one IP
+// version: with IPv6SetName, the IPv6 addresses go to that IP set, and the
+// IPv4 ones to SetName.
 type IPSet struct {
 	ID     string // action id
 	Client API
 	// SetName is the name of the IP set.
 	SetName string
-	Scope   types.Scope
+	// IPv6SetName is the name of the IP set of the IPv6 addresses (empty:
+	// SetName).
+	IPv6SetName string
+	Scope       types.Scope
 	// Field is the event field holding the address (see
 	// detection.FieldValue).
 	Field   string
 	Remove  bool
 	Timeout time.Duration
 
-	mu    sync.Mutex
-	setID string // looked up by name if not configured
+	mu  sync.Mutex
+	ids map[string]string // IP set ids by name, looked up if not configured
 }
 
 // New creates the action. setID may be empty: it is looked up by name the
 // first time the action runs.
 func New(id string, client API, name, setID string, scope types.Scope, field string, remove bool, timeout time.Duration) *IPSet {
-	return &IPSet{ID: id, Client: client, SetName: name, setID: setID, Scope: scope, Field: field, Remove: remove, Timeout: timeout}
+	s := &IPSet{ID: id, Client: client, SetName: name, Scope: scope, Field: field, Remove: remove, Timeout: timeout, ids: map[string]string{}}
+	if setID != "" {
+		s.ids[name] = setID
+	}
+	return s
+}
+
+// WithIPv6 sends the IPv6 addresses to the IP set name (id may be empty:
+// looked up by name), and returns s.
+func (s *IPSet) WithIPv6(name, id string) *IPSet {
+	s.IPv6SetName = name
+	if id != "" {
+		s.ids[name] = id
+	}
+	return s
+}
+
+// setName returns the name of the IP set of an address.
+func (s *IPSet) setName(addr netip.Addr) string {
+	if addr.Is6() && s.IPv6SetName != "" {
+		return s.IPv6SetName
+	}
+	return s.SetName
 }
 
 func (s *IPSet) Name() string { return s.ID }
@@ -76,24 +103,25 @@ func (s *IPSet) Execute(ctx context.Context, alert *event.Alert) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	setID, err := s.lookup(ctx)
+	name := s.setName(cidr.Addr())
+	setID, err := s.lookup(ctx, name)
 	if err != nil {
 		return err
 	}
 	for attempt := 1; ; attempt++ {
-		changed, err := s.update(ctx, setID, cidr)
+		changed, err := s.update(ctx, name, setID, cidr)
 		var lock *types.WAFOptimisticLockException
 		if errors.As(err, &lock) && attempt < maxAttempts {
 			continue // changed meanwhile: read it again
 		}
 		if err != nil {
-			return fmt.Errorf("WAF IP set %s: %w", s.SetName, err)
+			return fmt.Errorf("WAF IP set %s: %w", name, err)
 		}
 		what := map[bool]string{false: "added %s to", true: "removed %s from"}[s.Remove]
 		if !changed {
 			what = map[bool]string{false: "%s already in", true: "%s not in"}[s.Remove]
 		}
-		log.Printf("action %s: "+what+" WAF IP set %s for alert %s", s.ID, cidr, s.SetName, alert.ID)
+		log.Printf("action %s: "+what+" WAF IP set %s for alert %s", s.ID, cidr, name, alert.ID)
 		return nil
 	}
 }
@@ -116,27 +144,27 @@ func (s *IPSet) address(a *event.Alert) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
-// lookup returns the id of the IP set, looked up by name once.
-func (s *IPSet) lookup(ctx context.Context) (string, error) {
+// lookup returns the id of an IP set, looked up by name once.
+func (s *IPSet) lookup(ctx context.Context, name string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.setID != "" {
-		return s.setID, nil
+	if id := s.ids[name]; id != "" {
+		return id, nil
 	}
 	in := &wafv2.ListIPSetsInput{Scope: s.Scope, Limit: aws.Int32(100)}
 	for {
 		out, err := s.Client.ListIPSets(ctx, in)
 		if err != nil {
-			return "", fmt.Errorf("WAF IP set %s: looking up its id: %w", s.SetName, err)
+			return "", fmt.Errorf("WAF IP set %s: looking up its id: %w", name, err)
 		}
 		for _, set := range out.IPSets {
-			if aws.ToString(set.Name) == s.SetName {
-				s.setID = aws.ToString(set.Id)
-				return s.setID, nil
+			if aws.ToString(set.Name) == name {
+				s.ids[name] = aws.ToString(set.Id)
+				return s.ids[name], nil
 			}
 		}
 		if aws.ToString(out.NextMarker) == "" || len(out.IPSets) == 0 {
-			return "", fmt.Errorf("WAF IP set %s: no IP set of this name in scope %s (and region)", s.SetName, s.Scope)
+			return "", fmt.Errorf("WAF IP set %s: no IP set of this name in scope %s (and region)", name, s.Scope)
 		}
 		in.NextMarker = out.NextMarker
 	}
@@ -144,8 +172,8 @@ func (s *IPSet) lookup(ctx context.Context) (string, error) {
 
 // update reads the IP set and writes it with the address added or removed,
 // and tells whether it changed.
-func (s *IPSet) update(ctx context.Context, setID string, cidr netip.Prefix) (bool, error) {
-	got, err := s.Client.GetIPSet(ctx, &wafv2.GetIPSetInput{Name: aws.String(s.SetName), Id: aws.String(setID), Scope: s.Scope})
+func (s *IPSet) update(ctx context.Context, name, setID string, cidr netip.Prefix) (bool, error) {
+	got, err := s.Client.GetIPSet(ctx, &wafv2.GetIPSetInput{Name: aws.String(name), Id: aws.String(setID), Scope: s.Scope})
 	if err != nil {
 		return false, err
 	}
@@ -154,7 +182,16 @@ func (s *IPSet) update(ctx context.Context, setID string, cidr netip.Prefix) (bo
 		return false, errors.New("no IP set returned")
 	}
 	if cidr.Addr().Is4() != (set.IPAddressVersion == types.IPAddressVersionIpv4) {
-		return false, fmt.Errorf("%s does not fit in an %s IP set", cidr.Addr(), set.IPAddressVersion)
+		hint := ""
+		switch {
+		case cidr.Addr().Is6() && s.IPv6SetName == "":
+			hint = ": give an IPv6 IP set for them in ipset.ipv6_name"
+		case cidr.Addr().Is6():
+			hint = ": ipset.ipv6_name must be an IPv6 IP set"
+		case s.IPv6SetName != "":
+			hint = ": with ipset.ipv6_name, ipset.name must be an IPv4 IP set"
+		}
+		return false, fmt.Errorf("%s does not fit in an %s IP set%s", cidr.Addr(), set.IPAddressVersion, hint)
 	}
 	i := slices.IndexFunc(set.Addresses, func(a string) bool {
 		p, err := netip.ParsePrefix(a)
@@ -180,7 +217,7 @@ func (s *IPSet) update(ctx context.Context, setID string, cidr netip.Prefix) (bo
 		description = set.Description
 	}
 	_, err = s.Client.UpdateIPSet(ctx, &wafv2.UpdateIPSetInput{
-		Name:        aws.String(s.SetName),
+		Name:        aws.String(name),
 		Id:          aws.String(setID),
 		Scope:       s.Scope,
 		Addresses:   addresses,

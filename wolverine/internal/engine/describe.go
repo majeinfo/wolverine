@@ -143,8 +143,12 @@ func actionTarget(a config.Action) string {
 		return "on " + a.SSH.Host
 	case "aws-waf-ipset":
 		op := or(a.IPSet.Operation, "add")
+		set := a.IPSet.Name
+		if a.IPSet.IPv6Name != "" {
+			set += " (IPv4) or " + a.IPSet.IPv6Name + " (IPv6)"
+		}
 		return fmt.Sprintf("%s %s of the last event %s WAF IP set %s (%s%s)", op, or(a.IPSet.Field, "SourceIP"),
-			map[bool]string{true: "to", false: "from"}[op == "add"], a.IPSet.Name, or(a.IPSet.Scope, "REGIONAL"), prefixed(", ", a.AWS.Region))
+			map[bool]string{true: "to", false: "from"}[op == "add"], set, or(a.IPSet.Scope, "REGIONAL"), prefixed(", ", a.AWS.Region))
 	case "webhook":
 		if a.Webhook.URLEnv != "" {
 			return "to the URL in $" + a.Webhook.URLEnv
