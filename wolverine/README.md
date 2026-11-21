@@ -1309,7 +1309,9 @@ hours), refreshed every 10 s to 1 min:
   the log volume processed (the size of the lines read, uncompressed).
 - **Charts:** log lines (parsed and unparsed), alerts by rule, rule matches,
   and lines by source. Hover a chart, or focus it and use the arrow keys,
-  for the values.
+  for the values. Click a name in the legend of a chart to hide its line
+  (or bars), and again to show it; the scale follows the visible series,
+  and the choice is remembered by the browser.
 - **Tables:** the counters of each source and rule.
 - **Alerts:** the alerts raised in the range, plus the older ones whose
   undo is still planned (what they did, such as a blocked address, is still

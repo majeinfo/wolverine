@@ -161,8 +161,30 @@
     return 10 * exp;
   }
 
-  function drawChart(container, times, series, opts) {
-    const legendNeeded = series.length >= 2;
+  // The series hidden from each chart by a click in its legend, by chart id,
+  // remembered in this browser.
+  const hiddenSeries = (() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("wolverine.hiddenSeries") || "{}");
+      const m = {};
+      for (const k of Object.keys(saved)) if (Array.isArray(saved[k])) m[k] = new Set(saved[k]);
+      return m;
+    } catch (e) { return {}; }
+  })();
+  function saveHiddenSeries() {
+    try {
+      const o = {};
+      for (const k of Object.keys(hiddenSeries)) if (hiddenSeries[k].size) o[k] = Array.from(hiddenSeries[k]);
+      localStorage.setItem("wolverine.hiddenSeries", JSON.stringify(o));
+    } catch (e) { /* not remembered */ }
+  }
+
+  function drawChart(container, times, allSeries, opts) {
+    const legendNeeded = allSeries.length >= 2;
+    // Hidden series are left out of the plot (and of its scale and tooltip)
+    // but stay in the legend, dimmed, to be shown again.
+    const hidden = (legendNeeded && hiddenSeries[container.id]) || new Set();
+    const series = allSeries.filter((s) => !hidden.has(s.name));
     container.replaceChildren();
     const width = container.clientWidth || 600;
     const height = container.clientHeight || 240;
@@ -214,7 +236,7 @@
     const allZero = maxV === 0;
     if (allZero) {
       const t = svg("text", { class: "empty", x: w / 2, y: h / 2, "text-anchor": "middle" });
-      t.textContent = "Nothing in this range";
+      t.textContent = series.length || !allSeries.length ? "Nothing in this range" : "All series hidden: click the legend to show them";
       g.append(t);
     }
 
@@ -339,13 +361,30 @@
     if (legendNeeded) {
       const legend = el("div", "legend");
       const seen = new Set();
-      for (const s of series) {
+      for (const s of allSeries) {
         if (seen.has(s.name)) continue;
         seen.add(s.name);
-        const item = el("span", "legend-item");
+        // A button that hides or shows the series.
+        const item = el("button", "legend-item");
+        item.type = "button";
+        const off = hidden.has(s.name);
+        item.classList.toggle("off", off);
+        item.setAttribute("aria-pressed", String(!off));
+        item.title = (off ? "Show " : "Hide ") + s.name;
         const key = el("span", opts.kind === "bar" ? "key-rect" : "key-line");
         key.style.background = s.color;
         item.append(key, document.createTextNode(s.name));
+        item.addEventListener("click", () => {
+          const set = hiddenSeries[container.id] || (hiddenSeries[container.id] = new Set());
+          if (set.has(s.name)) set.delete(s.name); else set.add(s.name);
+          saveHiddenSeries();
+          tooltip.hide();
+          drawChart(container, times, allSeries, opts);
+          // Keep the focus on the same item for the keyboard.
+          const again = Array.from(container.querySelectorAll(".legend-item")).find((b) => b.dataset.name === s.name);
+          if (again) again.focus();
+        });
+        item.dataset.name = s.name;
         legend.append(item);
       }
       container.append(legend);
@@ -689,7 +728,12 @@
   async function load(withFeed) {
     document.querySelectorAll(".chart").forEach((c) => c.classList.add("loading"));
     try {
-      if (!state.info) state.info = await api("/api/v1/info");
+      if (!state.info) {
+        state.info = await api("/api/v1/info");
+        // Without rules (or sources), the server sends null.
+        state.info.rules = state.info.rules || [];
+        state.info.sources = state.info.sources || [];
+      }
       const from = encodeURIComponent(rangeParam());
       const [range, total, series] = await Promise.all([
         api("/api/v1/stats?from=" + from),
