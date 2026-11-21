@@ -101,7 +101,21 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 	r.changed = true
 
 	now := r.now()
-	mems := append(evict(r.groups[key], ev.Timestamp.Add(-r.Window)), memorized{ev.Timestamp, ev, now})
+	// Events may come out of order (several files, S3 objects, sources):
+	// the window ends at the newest event of the group, and an event older
+	// than the window is not counted.
+	newest := ev.Timestamp
+	for _, m := range r.groups[key] {
+		if m.ts.After(newest) {
+			newest = m.ts
+		}
+	}
+	cutoff := newest.Add(-r.Window)
+	if ev.Timestamp.Before(cutoff) {
+		verbose.Debugf("rule %s: %s=%s: event of %s older than the window of the group, not counted", r.RuleID, r.GroupBy, key, ev.Timestamp.Format(time.DateTime))
+		return true, nil
+	}
+	mems := append(evict(r.groups[key], cutoff), memorized{ev.Timestamp, ev, now})
 	verbose.Debugf("rule %s: %s=%s: %d/%d events within %s", r.RuleID, r.GroupBy, key, len(mems), r.Count, r.Window)
 	if len(mems) < r.Count {
 		r.groups[key] = mems
@@ -131,7 +145,7 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 		Timestamp: ev.Timestamp,
 		Severity:  r.Severity,
 		Message: fmt.Sprintf("%s: %d events for %s=%s within %s",
-			r.Description, len(mems), r.GroupBy, key, mems[len(mems)-1].ts.Sub(mems[0].ts)),
+			r.Description, len(mems), r.GroupBy, key, span(mems)),
 		Events: evs,
 		Metadata: map[string]any{
 			"group_by": r.GroupBy,
@@ -142,13 +156,24 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 	}}
 }
 
-// evict drops the events older than cutoff (event time).
+// evict drops the events older than cutoff (event time). They are in the
+// order they were memorized, not always in time order: all are checked.
 func evict(mems []memorized, cutoff time.Time) []memorized {
-	i := 0
-	for i < len(mems) && mems[i].ts.Before(cutoff) {
-		i++
+	return slices.DeleteFunc(mems, func(m memorized) bool { return m.ts.Before(cutoff) })
+}
+
+// span returns the time between the oldest and the newest events.
+func span(mems []memorized) time.Duration {
+	oldest, newest := mems[0].ts, mems[0].ts
+	for _, m := range mems[1:] {
+		if m.ts.Before(oldest) {
+			oldest = m.ts
+		}
+		if m.ts.After(newest) {
+			newest = m.ts
+		}
 	}
-	return mems[i:]
+	return newest.Sub(oldest)
 }
 
 // Expire forgets the events and suppressions memorized before cutoff (wall

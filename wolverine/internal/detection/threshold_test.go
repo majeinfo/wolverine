@@ -320,3 +320,28 @@ func TestTrim(t *testing.T) {
 		}
 	}
 }
+
+// Events out of order (several files or S3 objects): the time between the
+// first and the last is never negative, and the window ends at the newest.
+func TestOutOfOrder(t *testing.T) {
+	t0 := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	r := sshFailedLoginsPerIP(3, 10*time.Minute)
+	r.Evaluate(failed("10.0.0.1", t0.Add(5*time.Minute)))
+	r.Evaluate(failed("10.0.0.1", t0.Add(8*time.Minute)))
+	alerts := r.Evaluate(failed("10.0.0.1", t0.Add(time.Minute))) // older
+	if len(alerts) != 1 || !strings.HasSuffix(alerts[0].Message, "3 events for SourceIP=10.0.0.1 within 7m0s") {
+		t.Fatalf("alerts: %+v", alerts)
+	}
+
+	// An event older than the window of the newest is not counted, and an
+	// older one memorized first is dropped by a newer one.
+	r.Evaluate(failed("10.0.0.2", t0.Add(time.Minute)))
+	r.Evaluate(failed("10.0.0.2", t0.Add(30*time.Minute))) // drops +1m
+	if a := r.Evaluate(failed("10.0.0.2", t0.Add(2*time.Minute))); a != nil {
+		t.Errorf("an event older than the window counted: %+v", a)
+	}
+	r.Evaluate(failed("10.0.0.2", t0.Add(25*time.Minute)))
+	if a := r.Evaluate(failed("10.0.0.2", t0.Add(21*time.Minute))); len(a) != 1 || !strings.HasSuffix(a[0].Message, "within 9m0s") {
+		t.Errorf("within the window: %+v", a)
+	}
+}

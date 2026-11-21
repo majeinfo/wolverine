@@ -587,6 +587,10 @@ events with the same `group_by` value occur within `window`:
   ignored.
 - **Event time:** the window uses the event timestamps, not the clock, so
   replaying an old log gives the same alerts.
+- **Out of order:** events may come out of time order (several files, S3
+  objects or sources). The window ends at the newest event of the group: an
+  older event that falls outside it is not counted. The alert message gives
+  the time between the oldest and the newest events.
 - **After an alert,** the counter of that group restarts from zero.
 - **`suppress`**: no new alert for the same group during that time (`0`:
   no suppression).
