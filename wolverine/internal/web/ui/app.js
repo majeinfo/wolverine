@@ -561,6 +561,15 @@
     for (const r of runs) {
       const item = el("span", "action-item");
       item.append(el("span", "action-name", actionName(r)), actionStatus(r, false));
+      // Why it failed, cut to one line; all of it on hover and in the
+      // action log of the alert.
+      if (r.Status === "failed" || r.Status === "dropped") {
+        const why = r.Error || r.Detail;
+        if (why) {
+          item.append(el("span", "action-error", why));
+          item.title = actionName(r) + ": " + why;
+        }
+      }
       td.append(item);
     }
     return td;
@@ -601,7 +610,11 @@
       if (r.Duration) details.push("took " + durationLabel(r.Duration));
       if (r.Detail) details.push(r.Detail);
       const det = el("td", "detail", details.join(" · "));
-      if (r.Error) det.append(el("div", "error", r.Error));
+      if (r.Error) {
+        const e = el("div", "error");
+        e.append(el("span", "error-label", "Error: "), document.createTextNode(r.Error));
+        det.append(e);
+      }
       tr.append(cell(timeLabel(new Date(r.Time), !sameDay(new Date(r.Time)), true), "time"), cell(r.Action), status, det);
       body.append(tr);
     }

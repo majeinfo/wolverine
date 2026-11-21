@@ -1316,8 +1316,10 @@ hours), refreshed every 10 s to 1 min:
 - **Alerts:** the alerts raised in the range, plus the older ones whose
   undo is still planned (what they did, such as a blocked address, is still
   in effect), then the new ones as they are raised. Each shows the latest
-  status of its actions (undo actions included), updated live. Select one
-  for its last log line, its event time and its action log.
+  status of its actions (undo actions included), updated live; a failed
+  action shows the start of its error message (all of it on hover). Select
+  one for its last log line, its event time and its action log, with the
+  full error message of each failed run.
 
 It follows the system's light or dark mode; the Theme button switches it.
 The dashboard is built into the binary and loads nothing from the Internet.

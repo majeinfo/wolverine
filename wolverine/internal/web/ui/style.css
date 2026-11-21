@@ -191,6 +191,7 @@ table.data tr:last-child td { border-bottom: none; }
 .feed td.actions { min-width: 160px; }
 .action-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-size: 12px; }
 .action-item + .action-item { margin-top: 2px; }
+.action-error { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .action-name { color: var(--text-primary); }
 .feed td.new { animation: flash 2.5s ease-out; }
 .status { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; color: var(--text-secondary); }
@@ -208,6 +209,7 @@ table.data.log td, table.data.log th { padding: 4px 8px; }
 table.data.log td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 table.data.log td.detail { color: var(--text-secondary); min-width: 200px; }
 table.data.log .error { color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; margin-top: 2px; }
+table.data.log .error-label { color: var(--critical); font-family: inherit; font-weight: 600; }
 .severity { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .severity-icon { font-size: 10px; }
 .severity[data-level="critical"] .severity-icon { color: var(--critical); }
