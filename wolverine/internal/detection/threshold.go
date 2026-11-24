@@ -139,13 +139,16 @@ func (r *ThresholdRule) Process(ev *event.Event) (bool, []*event.Alert) {
 		}
 	}
 
+	start, end := bounds(mems)
 	return true, []*event.Alert{{
 		ID:        newID(),
 		RuleID:    r.RuleID,
 		Timestamp: ev.Timestamp,
+		Start:     start,
+		End:       end,
 		Severity:  r.Severity,
 		Message: fmt.Sprintf("%s: %d events for %s=%s within %s",
-			r.Description, len(mems), r.GroupBy, key, span(mems)),
+			r.Description, len(mems), r.GroupBy, key, end.Sub(start)),
 		Events: evs,
 		Metadata: map[string]any{
 			"group_by": r.GroupBy,
@@ -162,8 +165,8 @@ func evict(mems []memorized, cutoff time.Time) []memorized {
 	return slices.DeleteFunc(mems, func(m memorized) bool { return m.ts.Before(cutoff) })
 }
 
-// span returns the time between the oldest and the newest events.
-func span(mems []memorized) time.Duration {
+// bounds returns the times of the oldest and the newest events.
+func bounds(mems []memorized) (time.Time, time.Time) {
 	oldest, newest := mems[0].ts, mems[0].ts
 	for _, m := range mems[1:] {
 		if m.ts.Before(oldest) {
@@ -173,7 +176,7 @@ func span(mems []memorized) time.Duration {
 			newest = m.ts
 		}
 	}
-	return newest.Sub(oldest)
+	return oldest, newest
 }
 
 // Expire forgets the events and suppressions memorized before cutoff (wall

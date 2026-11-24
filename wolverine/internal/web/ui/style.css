@@ -185,6 +185,7 @@ table.data tr:last-child td { border-bottom: none; }
 @keyframes flash { from { background: var(--flash); } to { background: transparent; } }
 .feed td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .feed td.message { min-width: 240px; }
+.event-range { margin-top: 2px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .feed tr.details td { background: var(--wash); }
 .feed pre { margin: 0; white-space: pre-wrap; word-break: break-all; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-secondary); }
 

@@ -662,7 +662,12 @@
       sev.append(severityBadge(a.Severity));
       const summary = actionsSummary(a);
       if (updatedIDs && updatedIDs.has(a.ID)) summary.classList.add("new");
-      tr.append(cell(timeLabel(raisedAt(a), true), "time"), sev, cell(a.RuleID), cell(alertValue(a)), cell(a.Message, "message"), summary);
+      const time = cell(timeLabel(eventRange(a)[0], true), "time");
+      if (a.Raised) time.title = "Raised " + raisedAt(a).toLocaleString();
+      // The message, and the time range of the events that produced it.
+      const msg = cell(a.Message, "message");
+      msg.append(el("div", "event-range", "Events: " + rangeLabel(a)));
+      tr.append(time, sev, cell(a.RuleID), cell(alertValue(a)), msg, summary);
       const toggle = () => {
         if (state.open.has(a.ID)) state.open.delete(a.ID); else state.open.add(a.ID);
         renderFeed();
@@ -677,7 +682,10 @@
         const evs = a.Events || [];
         const last = evs.length ? evs[evs.length - 1] : null;
         const lines = ["Alert " + a.ID + (a.Raised ? ", raised " + raisedAt(a).toLocaleString() : "")];
-        if (a.Timestamp) lines.push("Event time: " + new Date(a.Timestamp).toLocaleString());
+        if (a.Timestamp) {
+          const [start, end] = eventRange(a);
+          lines.push(end - start < 1000 ? "Event time: " + start.toLocaleString() : "Events: from " + start.toLocaleString() + " to " + end.toLocaleString());
+        }
         if (last) {
           lines.push("Last event: " + [last.Source, last.Hostname, last.Service].filter(Boolean).join(" / "));
           lines.push(last.Raw || last.Message || "");
@@ -703,7 +711,8 @@
   function addAlert(a) {
     if (state.feedIDs.has(a.ID)) return;
     state.feedIDs.add(a.ID);
-    state.feed.unshift(a);
+    state.feed.push(a);
+    state.feed.sort(byFirstEvent);
     while (state.feed.length > MAX_FEED) state.feedIDs.delete(state.feed.pop().ID);
     renderFeed(new Set([a.ID]));
   }
@@ -721,21 +730,38 @@
   // for an alert no longer kept).
   function raisedAt(a) { return new Date(a.Raised || a.Timestamp); }
 
+  // eventRange is the time range of the events that raised an alert, from
+  // the log (its Timestamp for an alert saved by an older version).
+  function eventRange(a) { return [new Date(a.Start || a.Timestamp), new Date(a.End || a.Timestamp)]; }
+
+  // The alerts are shown in the order of their first event, newest first:
+  // a log read late gives alerts raised late, about older events.
+  function byFirstEvent(a, b) { return eventRange(b)[0] - eventRange(a)[0]; }
+
+  // rangeLabel gives the time range of the events of an alert, with the
+  // date when not today.
+  function rangeLabel(a) {
+    const [start, end] = eventRange(a);
+    const first = timeLabel(start, !sameDay(start), true);
+    if (end - start < 1000) return first;
+    return first + " → " + timeLabel(end, end.toDateString() !== start.toDateString() || !sameDay(end), true);
+  }
+
   // loadFeed loads the alerts raised in the range, and those whose undo is
   // still planned, whatever their age: what they did is still in effect.
   async function loadFeed() {
     const [r, pending] = await Promise.all([
-      api("/api/v1/alerts?events=last&limit=" + MAX_FEED + "&from=" + encodeURIComponent(rangeParam())),
-      api("/api/v1/alerts?events=last&undo=pending&limit=" + MAX_FEED),
+      api("/api/v1/alerts?events=last&sort=event&limit=" + MAX_FEED + "&from=" + encodeURIComponent(rangeParam())),
+      api("/api/v1/alerts?events=last&sort=event&undo=pending&limit=" + MAX_FEED),
     ]);
     const ids = new Set(r.alerts.map((a) => a.ID));
     const older = pending.alerts.filter((a) => !ids.has(a.ID));
-    state.feed = r.alerts.concat(older).sort((a, b) => raisedAt(b) - raisedAt(a));
+    state.feed = r.alerts.concat(older).sort(byFirstEvent);
     state.feedIDs = new Set(state.feed.map((a) => a.ID));
     renderFeed();
     let text = (r.total > r.alerts.length ? "Latest " + r.alerts.length + " of " + fmt.format(r.total) : fmt.format(r.total)) + " raised in this range";
     if (older.length) text += ", and " + older.length + " older with an undo still planned";
-    $("sub-feed").textContent = text + ", newest first; new alerts and actions appear as they happen. Select a row for its last log line and its action log.";
+    $("sub-feed").textContent = text + ", by the time of their first event, newest first; new alerts and actions appear as they happen. Select a row for its last log line and its action log.";
   }
 
   async function load(withFeed) {

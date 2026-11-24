@@ -332,6 +332,10 @@ func TestOutOfOrder(t *testing.T) {
 	if len(alerts) != 1 || !strings.HasSuffix(alerts[0].Message, "3 events for SourceIP=10.0.0.1 within 7m0s") {
 		t.Fatalf("alerts: %+v", alerts)
 	}
+	// The time range of the events, whatever their order.
+	if a := alerts[0]; !a.Start.Equal(t0.Add(time.Minute)) || !a.End.Equal(t0.Add(8*time.Minute)) || !a.Timestamp.Equal(t0.Add(time.Minute)) {
+		t.Errorf("range: %s - %s, timestamp %s", a.Start, a.End, a.Timestamp)
+	}
 
 	// An event older than the window of the newest is not counted, and an
 	// older one memorized first is dropped by a newer one.

@@ -3,9 +3,16 @@ package event
 import "time"
 
 type Alert struct {
-	ID        string
-	RuleID    string
+	ID     string
+	RuleID string
+	// Timestamp is the time of the event that raised the alert, from the
+	// log.
 	Timestamp time.Time
+	// Start and End are the times of the oldest and newest events that
+	// raised the alert, from the log: the time range that produced it.
+	// Zero for an alert saved by an older version (see EventRange).
+	Start time.Time `json:",omitzero"`
+	End   time.Time `json:",omitzero"`
 
 	Severity string
 	Message  string
@@ -29,6 +36,15 @@ func (a *Alert) Count() int {
 		return int(n)
 	}
 	return len(a.Events)
+}
+
+// EventRange returns the time range of the events that raised the alert:
+// Start and End, or else Timestamp.
+func (a *Alert) EventRange() (start, end time.Time) {
+	if a.Start.IsZero() || a.End.IsZero() {
+		return a.Timestamp, a.Timestamp
+	}
+	return a.Start, a.End
 }
 
 // Trimmed returns a copy of the alert with only its last event (the one the

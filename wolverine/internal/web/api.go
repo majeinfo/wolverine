@@ -192,6 +192,9 @@ type alertFilter struct {
 	events   string // none, last, all
 	// pendingUndo keeps only the alerts with an undo not run yet.
 	pendingUndo bool
+	// byEvent sorts the alerts by the time of their first event (from the
+	// log) instead of when they were raised.
+	byEvent bool
 }
 
 func parseAlertFilter(q url.Values) (alertFilter, error) {
@@ -214,6 +217,13 @@ func parseAlertFilter(q url.Values) (alertFilter, error) {
 		f.pendingUndo = true
 	default:
 		return f, badRequest("undo: %q: pending is the only value", v)
+	}
+	switch v := q.Get("sort"); v {
+	case "", "raised":
+	case "event":
+		f.byEvent = true
+	default:
+		return f, badRequest("sort: %q: raised or event", v)
 	}
 	return f, nil
 }
@@ -280,6 +290,12 @@ func raised(r engine.AlertRecord) time.Time {
 	return r.Raised
 }
 
+// firstEvent returns the time of the first event of an alert.
+func firstEvent(r engine.AlertRecord) time.Time {
+	start, _ := r.Alert.EventRange()
+	return start
+}
+
 // alertRecords returns the alerts kept, newest first, and their pending
 // undos by alert id. The alerts whose undo is pending but that are no
 // longer kept (an undo after more than max_lifetime) are included, without
@@ -340,6 +356,9 @@ func (s *Server) alerts(r *http.Request) (any, error) {
 		}
 	}
 	records, pending := s.alertRecords()
+	if f.byEvent {
+		slices.SortStableFunc(records, func(a, b engine.AlertRecord) int { return firstEvent(b).Compare(firstEvent(a)) })
+	}
 	resp := alertsResponse{Alerts: []alertView{}}
 	for _, r := range records {
 		t, p := raised(r), pending[r.Alert.ID]

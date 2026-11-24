@@ -343,6 +343,22 @@ func TestAlertsRaisedAndPendingUndo(t *testing.T) {
 	if resp := get(t, srv.URL+"/api/v1/alerts?undo=done", "", nil); resp.StatusCode != 400 {
 		t.Errorf("undo=done: %d", resp.StatusCode)
 	}
+
+	// Sorted by the time of their first event: a2 (10:20), a1 (10:00),
+	// old (07:00, from Start), gone (two days ago, from Timestamp).
+	old.Start, old.End = t0.Add(-3*time.Hour), t0.Add(-2*time.Hour)
+	if got, want := ids("sort=event"), "a2,a1(undo 12:00),old,gone(undo 11:00)"; got != want {
+		t.Errorf("sort=event: %s, want %s", got, want)
+	}
+	if got, want := ids("sort=event&limit=1&from=-10m"), "a2"; got != want {
+		t.Errorf("sort=event, limit=1: %s, want %s", got, want)
+	}
+	if got, want := ids("sort=raised"), "old,a2,a1(undo 12:00),gone(undo 11:00)"; got != want {
+		t.Errorf("sort=raised: %s, want %s", got, want)
+	}
+	if resp := get(t, srv.URL+"/api/v1/alerts?sort=time", "", nil); resp.StatusCode != 400 {
+		t.Errorf("sort=time: %d", resp.StatusCode)
+	}
 }
 
 func TestWatch(t *testing.T) {

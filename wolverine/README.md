@@ -1225,10 +1225,14 @@ and the same `totals`, `sources` and `rules`.
 | `undo=pending` | only the alerts with an undo not run yet, whatever their age |
 | `limit` | at most that many alerts (default 100, at most 10000); `total` counts them all |
 | `events` | `last` (default): the last event of each alert; `all`; `none` |
+| `sort` | `raised` (default): newest raised first; `event`: newest first event first (`Start`); `limit` keeps the first ones in this order |
 
-An alert has two times: `Raised`, when wolverine raised it, and
-`Timestamp`, the time of its last event as read from the log (older for a
-log read late, such as files downloaded from S3).
+An alert has several times: `Raised`, when wolverine raised it;
+`Timestamp`, the time of the event that raised it, as read from the log;
+and `Start` and `End`, the times of its oldest and newest events: the time
+range that produced it. The log times are older than `Raised` for a log
+read late, such as files downloaded from S3. An alert saved by an older
+version has no `Start` and `End`: use `Timestamp`.
 
 An alert whose undo is not run yet has `Undo`: the action undone
 (`Action`), the undo actions left (`Actions`), when they run (`Due`), and
@@ -1315,11 +1319,14 @@ hours), refreshed every 10 s to 1 min:
 - **Tables:** the counters of each source and rule.
 - **Alerts:** the alerts raised in the range, plus the older ones whose
   undo is still planned (what they did, such as a blocked address, is still
-  in effect), then the new ones as they are raised. Each shows the latest
-  status of its actions (undo actions included), updated live; a failed
-  action shows the start of its error message (all of it on hover). Select
-  one for its last log line, its event time and its action log, with the
-  full error message of each failed run.
+  in effect), then the new ones as they are raised. They are sorted by the
+  time of their first event, newest first, not by when they were raised:
+  a log read late gives alerts about older events. Each shows the time
+  range of the events that produced it, and the latest status of its
+  actions (undo actions included), updated live; a failed action shows
+  the start of its error message (all of it on hover). Select one for its
+  last log line, the time range of its events and its action log, with
+  the full error message of each failed run.
 
 It follows the system's light or dark mode; the Theme button switches it.
 The dashboard is built into the binary and loads nothing from the Internet.
