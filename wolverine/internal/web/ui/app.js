@@ -139,6 +139,16 @@
         t.append(row);
       }
       t.hidden = false;
+      this.place(x, y);
+    },
+    // text shows a title and an explanation.
+    text(x, y, title, text) {
+      this.show(x, y, title, []);
+      $("tooltip").append(el("div", "tooltip-text", text));
+      this.place(x, y);
+    },
+    place(x, y) {
+      const t = $("tooltip");
       const w = t.offsetWidth, h = t.offsetHeight;
       let left = x + 14, top = y + 14;
       if (left + w > window.innerWidth - 8) left = x - w - 14;
@@ -148,6 +158,23 @@
     },
     hide() { $("tooltip").hidden = true; },
   };
+
+  // The explanations of the counters, shown on hover or focus of the labels
+  // with data-hint.
+  const HINTS = {
+    matches: ["Rule matches", "Events a rule recognized: they meet its match conditions and have a group_by value (e.g. each failed SSH login with a source IP). Each one counts toward the rule's threshold."],
+    alerts: ["Alerts", "Raised when a rule reaches its threshold: count matches for the same group_by value within its window (e.g. 3 failed logins from one IP in 5 minutes). The count then starts again, and suppress holds back the next alerts for the same value: so there are usually far fewer alerts than matches."],
+    old: ["Too old", "Lines discarded when read: older than log_ttl, by their time in the log."],
+  };
+  document.querySelectorAll("[data-hint]").forEach((h) => {
+    const [title, text] = HINTS[h.dataset.hint];
+    h.setAttribute("aria-label", title + ": " + text);
+    h.addEventListener("pointerenter", (ev) => tooltip.text(ev.clientX, ev.clientY, title, text));
+    h.addEventListener("pointermove", (ev) => tooltip.place(ev.clientX, ev.clientY));
+    h.addEventListener("focus", () => { const b = h.getBoundingClientRect(); tooltip.text(b.left, b.bottom, title, text); });
+    h.addEventListener("pointerleave", () => tooltip.hide());
+    h.addEventListener("blur", () => tooltip.hide());
+  });
 
   // --- charts --------------------------------------------------------------
   // A chart draws series (name, color, values[]) over the bucket times, as

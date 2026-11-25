@@ -46,14 +46,14 @@
     <div class="tile"><div class="tile-label">Events</div><div class="tile-value" id="t-events">–</div><div class="tile-sub" id="s-events"></div></div>
     <div class="tile"><div class="tile-label">Unparsed</div><div class="tile-value" id="t-unparsed">–</div><div class="tile-sub" id="s-unparsed"></div></div>
     <div class="tile"><div class="tile-label">Excluded</div><div class="tile-value" id="t-excluded">–</div><div class="tile-sub" id="s-excluded"></div></div>
-    <div class="tile"><div class="tile-label">Rule matches</div><div class="tile-value" id="t-matches">–</div><div class="tile-sub" id="s-matches"></div></div>
-    <div class="tile"><div class="tile-label">Alerts</div><div class="tile-value" id="t-alerts">–</div><div class="tile-sub" id="s-alerts"></div></div>
+    <div class="tile"><div class="tile-label"><span class="hint" tabindex="0" data-hint="matches">Rule matches</span></div><div class="tile-value" id="t-matches">–</div><div class="tile-sub" id="s-matches"></div></div>
+    <div class="tile"><div class="tile-label"><span class="hint" tabindex="0" data-hint="alerts">Alerts</span></div><div class="tile-value" id="t-alerts">–</div><div class="tile-sub" id="s-alerts"></div></div>
   </section>
 
   <section class="grid">
     <article class="panel"><h2>Log lines</h2><p class="panel-sub" id="sub-lines"></p><div class="chart" id="c-lines"></div></article>
-    <article class="panel"><h2>Alerts by rule</h2><p class="panel-sub" id="sub-alerts"></p><div class="chart" id="c-alerts"></div></article>
-    <article class="panel"><h2>Rule matches</h2><p class="panel-sub" id="sub-matches"></p><div class="chart" id="c-matches"></div></article>
+    <article class="panel"><h2><span class="hint" tabindex="0" data-hint="alerts">Alerts by rule</span></h2><p class="panel-sub" id="sub-alerts"></p><div class="chart" id="c-alerts"></div></article>
+    <article class="panel"><h2><span class="hint" tabindex="0" data-hint="matches">Rule matches</span></h2><p class="panel-sub" id="sub-matches"></p><div class="chart" id="c-matches"></div></article>
     <article class="panel"><h2>Lines by source</h2><p class="panel-sub" id="sub-sources"></p><div class="chart" id="c-sources"></div></article>
   </section>
 
@@ -61,14 +61,14 @@
     <article class="panel">
       <h2>Sources</h2>
       <div class="table-wrap"><table class="data">
-        <thead><tr><th>Source</th><th>Type</th><th class="num">Lines</th><th class="num">Volume</th><th class="num">Events</th><th class="num">Unparsed</th><th class="num">Excluded</th><th class="num" title="Discarded: older than log_ttl, by their time in the log">Too old</th></tr></thead>
+        <thead><tr><th>Source</th><th>Type</th><th class="num">Lines</th><th class="num">Volume</th><th class="num">Events</th><th class="num">Unparsed</th><th class="num">Excluded</th><th class="num"><span class="hint" tabindex="0" data-hint="old">Too old</span></th></tr></thead>
         <tbody id="sources"></tbody>
       </table></div>
     </article>
     <article class="panel">
       <h2>Rules</h2>
       <div class="table-wrap"><table class="data">
-        <thead><tr><th>Rule</th><th>Severity</th><th class="num">Matches</th><th class="num">Alerts</th></tr></thead>
+        <thead><tr><th>Rule</th><th>Severity</th><th class="num"><span class="hint" tabindex="0" data-hint="matches">Matches</span></th><th class="num"><span class="hint" tabindex="0" data-hint="alerts">Alerts</span></th></tr></thead>
         <tbody id="rules"></tbody>
       </table></div>
     </article>

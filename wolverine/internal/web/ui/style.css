@@ -168,6 +168,10 @@ main { padding: 16px; display: flex; flex-direction: column; gap: 16px; max-widt
 .tooltip-row { display: flex; align-items: center; gap: 8px; }
 .tooltip-value { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
 .tooltip-name { color: var(--text-secondary); }
+.tooltip-text { max-width: 320px; line-height: 1.4; color: var(--text-primary); }
+/* A label with an explanation on hover or focus. */
+.hint { cursor: help; text-decoration: underline dotted; text-decoration-color: var(--text-secondary); text-underline-offset: 3px; }
+.hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 
 .table-wrap { overflow-x: auto; }
 .feed-wrap { max-height: 520px; overflow-y: auto; }
