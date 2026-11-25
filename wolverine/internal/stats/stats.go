@@ -27,6 +27,9 @@ type Source struct {
 	// Excluded are the events dropped by the source's exclude lists and
 	// exclude_if.
 	Excluded int64 `json:"excluded"`
+	// Old are the lines discarded as older than log_ttl, by their time in
+	// the log.
+	Old int64 `json:"old"`
 	// Bytes is the size of the lines read, each with its end of line: the
 	// amount of log processed (uncompressed, for the compressed files).
 	Bytes int64 `json:"bytes"`
@@ -37,6 +40,7 @@ func (s *Source) add(o *Source) {
 	s.Events += o.Events
 	s.Unparsed += o.Unparsed
 	s.Excluded += o.Excluded
+	s.Old += o.Old
 	s.Bytes += o.Bytes
 }
 
@@ -180,6 +184,14 @@ func (s *Store) Excluded(source string) {
 	s.record(func(c *Counts) {
 		c.source(source).Excluded++
 		c.Totals.Excluded++
+	})
+}
+
+// Old counts a line discarded as older than log_ttl.
+func (s *Store) Old(source string) {
+	s.record(func(c *Counts) {
+		c.source(source).Old++
+		c.Totals.Old++
 	})
 }
 

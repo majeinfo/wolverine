@@ -22,15 +22,16 @@ func TestStore(t *testing.T) {
 	at(150 * time.Second)
 	s.Line("web", 10, true, false)
 	s.Excluded("web")
+	s.Old("ssh")
 	s.Line("ssh", 10, true, false)
 	s.Matched([]string{"brute"}, []string{"brute"})
 	s.Matched(nil, nil)
 
 	tot := s.Total()
-	if tot.Totals != (Totals{Source{5, 4, 1, 1, 50}, Rule{2, 1}}) {
+	if tot.Totals != (Totals{Source{5, 4, 1, 1, 1, 50}, Rule{2, 1}}) {
 		t.Errorf("totals: %+v", tot.Totals)
 	}
-	if *tot.Sources["ssh"] != (Source{4, 3, 1, 0, 40}) || *tot.Sources["web"] != (Source{1, 1, 0, 1, 10}) {
+	if *tot.Sources["ssh"] != (Source{4, 3, 1, 0, 1, 40}) || *tot.Sources["web"] != (Source{1, 1, 0, 1, 0, 10}) {
 		t.Errorf("sources: %+v %+v", tot.Sources["ssh"], tot.Sources["web"])
 	}
 	if *tot.Rules["brute"] != (Rule{2, 1}) || *tot.Rules["idle"] != (Rule{}) {

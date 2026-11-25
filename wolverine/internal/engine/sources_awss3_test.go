@@ -128,6 +128,7 @@ func TestRunAWSS3(t *testing.T) {
 		}
 	}
 	cfg.StateFile = ""
+	cfg.LogTTL = oldLogs // logs of a fixed date
 	cfg.Sources = []config.Source{{
 		ID:       "s3-logs",
 		Type:     "aws-s3",

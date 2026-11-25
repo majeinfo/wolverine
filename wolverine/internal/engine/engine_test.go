@@ -61,6 +61,7 @@ func TestRunShippedConfig(t *testing.T) {
 	messages.Directory, messages.Follow, messages.StartAt, messages.Disabled = dir, false, "", false
 	cfg.Sources = []config.Source{messages}
 	cfg.StateFile = ""
+	cfg.LogTTL = oldLogs // logs of a fixed date
 
 	eng, err := New(cfg)
 	if err != nil {
@@ -664,6 +665,61 @@ func TestExpireInterval(t *testing.T) {
 		if got := expireInterval(lifetime); got != want {
 			t.Errorf("%s: %s, want %s", lifetime, got, want)
 		}
+	}
+}
+
+// oldLogs is a log TTL for the tests whose logs have a fixed date.
+const oldLogs = 100 * 365 * 24 * time.Hour
+
+// The lines older than log_ttl, by their time in the log, are discarded
+// when read: not counted by the rules, nor written as events.
+func TestRunDiscardsOldLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secure")
+	now := time.Now()
+	var b strings.Builder
+	line := func(age time.Duration, ip string) {
+		fmt.Fprintf(&b, "%s Failed password for root from %s\n", now.Add(-age).Format(time.RFC3339), ip)
+	}
+	// Two old ones and a recent one: no alert, as the old ones are not
+	// counted.
+	line(3*time.Hour, "192.0.2.1")
+	line(2*time.Hour, "192.0.2.1")
+	line(10*time.Minute, "192.0.2.1")
+	// Three recent ones: an alert, even after old lines.
+	line(5*time.Minute, "192.0.2.2")
+	line(90*time.Minute, "192.0.2.2")
+	line(4*time.Minute, "192.0.2.2")
+	line(3*time.Minute, "192.0.2.2")
+	os.WriteFile(path, []byte(b.String()), 0o644)
+	src := logfile(path)
+	src.Regexp = `^(?P<timestamp>\S+) Failed password for (?P<username>\S+) from (?P<source_ip>\S+)$`
+	src.TimestampFormats = []string{"rfc3339"}
+	cfg := &config.Config{
+		Sources: []config.Source{src},
+		Rules:   []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: 24 * time.Hour}},
+		LogTTL:  time.Hour,
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var alerts, events bytes.Buffer
+	eng.Alerts, eng.Events = &alerts, &events
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(alerts.String(), "\n"); n != 1 || !strings.Contains(alerts.String(), "192.0.2.2") {
+		t.Errorf("alerts:\n%s", alerts.String())
+	}
+	if n := strings.Count(events.String(), "\n"); n != 4 {
+		t.Errorf("%d events written, want 4", n)
+	}
+	if n := eng.inputs[0].old.Load(); n != 3 {
+		t.Errorf("%d old lines, want 3", n)
+	}
+	if c := eng.stats.Total().Totals; c.Old != 3 || c.Lines != 7 {
+		t.Errorf("stats: %+v", c)
 	}
 }
 

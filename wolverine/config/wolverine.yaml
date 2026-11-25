@@ -58,11 +58,13 @@ state_file: /var/lib/wolverine/state.json
 # -max-lifetime option overrides it.
 max_lifetime: 24h
 
-# How long the log lines (raw line, message, fields) of the events counted
-# by the rules and of the alerts are kept in memory and in the state file
-# (wall clock). After it, an event counted keeps only its time (it still
-# counts) and an alert only its last event. Default: 1h; the -log-ttl option
-# overrides it.
+# How old a log line can be, by its time in the log (not when it is read).
+# An older line is discarded when read (a file read late, an archive). Once
+# older, the log lines (raw line, message, fields) of the events counted by
+# the rules and of the alerts are forgotten, in memory and in the state
+# file: an event counted keeps only its time (it still counts) and an alert
+# only its last event. Default: 1h; the -log-ttl option overrides it (e.g.
+# -log-ttl 720h to analyze a month of old logs).
 log_ttl: 1h
 
 # Percentage of the memory (of the machine, or of the cgroup if lower)

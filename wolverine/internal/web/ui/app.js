@@ -469,7 +469,7 @@
       key.style.background = srcColors.get(s.id).color;
       name.append(key, document.createTextNode(s.id));
       tr.append(name, cell(s.type, "muted"), cell(fmt.format(c.lines || 0), "num"), cell(fmtBytes(c.bytes), "num"), cell(fmt.format(c.events || 0), "num"),
-        cell(fmt.format(c.unparsed || 0), "num"), cell(fmt.format(c.excluded || 0), "num"));
+        cell(fmt.format(c.unparsed || 0), "num"), cell(fmt.format(c.excluded || 0), "num"), cell(fmt.format(c.old || 0), "num"));
       return tr;
     });
     $("sources").replaceChildren(...rows);

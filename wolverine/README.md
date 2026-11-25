@@ -70,7 +70,7 @@ bin/wolverine -config config/wolverine.yaml
 | `-state FILE` | state file where the position of each source is saved; overrides `state_file` from the configuration. `-state none` disables it |
 | `-http ADDRESS` | run the [web server](#web-server-api-and-dashboard) (REST API and dashboard) on ADDRESS, e.g. `127.0.0.1:8080`; overrides `http.listen`. `-http none` disables it |
 | `-max-lifetime DURATION` | how long the data memorized by the rules and the alerts raised are kept, e.g. `12h`; overrides `max_lifetime` (default `24h`). See [maximum lifetime](#maximum-lifetime) |
-| `-log-ttl DURATION` | how long the log lines are kept in memory and in the state file, e.g. `30m`; overrides `log_ttl` (default `1h`). See [log TTL](#log-ttl-and-memory-limit) |
+| `-log-ttl DURATION` | how old a log line can be, by its time in the log: older lines are discarded when read, and forgotten from memory and the state file, e.g. `30m`; overrides `log_ttl` (default `1h`). See [log TTL](#log-ttl-and-memory-limit) |
 | `-memory-limit PERCENT` | percentage of the memory wolverine may use; overrides `memory_limit` (default `60`, `0`: no limit). See [memory limit](#log-ttl-and-memory-limit) |
 | `-events FILE` | append every event, after parsing and enrichment, as a JSON line to FILE (`-` for stdout) |
 | `-detailed-events` | include in the alerts written to stdout the events (log lines) that raised them |
@@ -115,7 +115,7 @@ The configuration is a main YAML file with these sections:
 exclude_lists: [...]     # named lists of IPs that rules can ignore
 state_file:    ...       # where the position of each source is saved
 max_lifetime:  24h       # how long rule data and alerts are kept in memory
-log_ttl:       1h        # how long the log lines are kept in memory
+log_ttl:       1h        # older log lines (by their time) are discarded
 memory_limit:  60        # percentage of the memory wolverine may use
 http:          {...}     # embedded web server: REST API and dashboard
 include_dir:   rules.d   # directory of additional configuration files
@@ -1087,13 +1087,21 @@ The events counted by the rules and the alerts carry their log lines
 `max_lifetime`, they would fill the memory and the state file. Two
 settings bound them.
 
-**`log_ttl`** is how long the log lines are kept, measured on the clock
-from the moment they were memorized:
+**`log_ttl`** is how old a log line can be, by its time in the log (its
+`timestamp`, or `date` and `time`), not by when wolverine read it:
 
-- An event counted by a rule keeps only its time after `log_ttl`: it still
+- A line older than `log_ttl` when it is read (a file or an archive read
+  late, a source catching up) is discarded: the rules do not count it,
+  and it is not written to `-events`. The dashboard counts these lines in
+  the **Too old** column of the sources (`old` in `/api/v1/stats`), and
+  the summary at exit gives them. A line without a time in the log gets
+  the time it was read, so it is never too old.
+- An event counted by a rule keeps only its time once older than
+  `log_ttl`: it still
   counts toward the threshold, so the rules detect the same things. Only its
   log line is forgotten.
-- An alert keeps only its last event after `log_ttl`, the one the actions
+- An alert keeps only its last event once all its events are older than
+  `log_ttl`, the one the actions
   use and the dashboard shows. Its `Metadata.count` still gives how many
   events raised it.
 - An alert raised from events whose log lines were forgotten has only the
@@ -1104,7 +1112,8 @@ from the moment they were memorized:
   undo actions use.
 - The state file saves what is in memory, so it shrinks the same way.
 
-The `-log-ttl` option overrides it, e.g. `-log-ttl 15m`.
+The `-log-ttl` option overrides it, e.g. `-log-ttl 15m`. To analyze old
+logs, give it a long enough duration, e.g. `-log-ttl 720h` for a month.
 
 **`memory_limit`** is the percentage of the memory wolverine may use: of
 the machine, or of the memory limit of its cgroup (systemd `MemoryMax`, a
@@ -1113,10 +1122,9 @@ container limit) if that is lower. `0` disables it.
 - The quota is given to the Go runtime as its soft memory limit, so the
   garbage collector works harder as wolverine gets close to it.
 - Every second, wolverine checks the memory it uses. Above the quota, it
-  forgets the least recently memorized data, until it uses less than 80%
-  of the quota:
-  1. the log lines first, as `log_ttl` does, those memorized more than
-     half of `log_ttl` ago, then a quarter... then all of them;
+  forgets the oldest data, until it uses less than 80% of the quota:
+  1. the log lines first, as `log_ttl` does, those older (by their time
+     in the log) than half of `log_ttl`, then a quarter... then all of them;
   2. only if that is not enough, the events counted and the alerts, as
      `max_lifetime` does, the oldest first. The rules then count fewer
      events: this is logged as a warning.
@@ -1162,6 +1170,7 @@ Wolverine counts, per source and per rule:
 | `events` | lines the source's regexp parsed |
 | `unparsed` | lines the regexp did not parse (still processed, with their raw text) |
 | `excluded` | events dropped by the source's `exclude` or `exclude_if` |
+| `old` | lines discarded as older than `log_ttl`, by their time in the log |
 | `matches` | events a rule matched: counted toward its threshold |
 | `alerts` | alerts a rule raised |
 
@@ -1202,8 +1211,8 @@ Every endpoint is a `GET` and returns JSON. Times are given as RFC 3339
 ```console
 $ curl -s 'localhost:8080/api/v1/stats?from=-1h'
 {"from":"…","to":"…","since_start":false,"available_since":"…",
- "totals":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"bytes":614400,"matches":341,"alerts":4},
- "sources":{"ssh":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"bytes":614400}},
+ "totals":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"old":0,"bytes":614400,"matches":341,"alerts":4},
+ "sources":{"ssh":{"lines":5120,"events":5087,"unparsed":33,"excluded":12,"old":0,"bytes":614400}},
  "rules":{"ssh-failed-logins-per-ip":{"matches":341,"alerts":4}}}
 ```
 

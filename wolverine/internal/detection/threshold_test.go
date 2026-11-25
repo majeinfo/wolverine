@@ -321,6 +321,25 @@ func TestTrim(t *testing.T) {
 	}
 }
 
+// Trim goes by the time of the events in the log, not when they were read:
+// events read late, out of order, are trimmed by their own time.
+func TestTrimByLogTime(t *testing.T) {
+	t0 := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	r := sshFailedLoginsPerIP(10, 24*time.Hour)
+	r.Now = func() time.Time { return t0.Add(5 * time.Hour) } // all read now
+	r.Evaluate(failed("10.0.0.1", t0.Add(4*time.Hour)))
+	r.Evaluate(failed("10.0.0.1", t0)) // older, read after
+	r.Evaluate(failed("10.0.0.1", t0.Add(3*time.Hour)))
+	if n := r.Trim(t0.Add(2 * time.Hour)); n != 1 {
+		t.Fatalf("trimmed %d log lines, want 1", n)
+	}
+	for _, m := range r.groups["10.0.0.1"] {
+		if (m.ev == nil) != m.ts.Equal(t0) {
+			t.Errorf("event of %s: trimmed %v", m.ts.Format("15:04"), m.ev == nil)
+		}
+	}
+}
+
 // Events out of order (several files or S3 objects): the time between the
 // first and the last is never negative, and the window ends at the newest.
 func TestOutOfOrder(t *testing.T) {

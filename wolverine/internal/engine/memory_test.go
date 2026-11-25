@@ -18,17 +18,27 @@ func alertWith(id string, n int) *event.Alert {
 	return a
 }
 
-// The alerts raised before the cutoff keep only their last event; the
-// alert itself is not modified (it may be in use), but replaced.
+// The alerts whose events are all before the cutoff (their time in the
+// log, not when they were raised) keep only their last event; the alert
+// itself is not modified (it may be in use), but replaced.
 func TestHistoryTrim(t *testing.T) {
 	t0 := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
 	var h history
 	old, recent := alertWith("old", 3), alertWith("recent", 3)
+	old.Timestamp, recent.Timestamp = t0, t0.Add(time.Hour)
+	// Raised after recent, about older events (a log read late).
+	late := alertWith("late", 2)
+	late.Timestamp, late.Start, late.End = t0, t0.Add(-time.Minute), t0
+	// Its first event is old, but not its last one.
+	spread := alertWith("spread", 2)
+	spread.Timestamp, spread.Start, spread.End = t0, t0, t0.Add(time.Hour)
 	h.add(old, t0)
 	h.add(recent, t0.Add(time.Hour))
+	h.add(late, t0.Add(2*time.Hour))
+	h.add(spread, t0.Add(2*time.Hour))
 	h.saved()
 
-	if n := h.trim(t0.Add(time.Minute)); n != 2 {
+	if n := h.trim(t0.Add(time.Minute)); n != 3 {
 		t.Fatalf("trimmed %d events, want 2", n)
 	}
 	if _, changed := h.saved(); !changed {
@@ -44,8 +54,11 @@ func TestHistoryTrim(t *testing.T) {
 	if len(old.Events) != 3 {
 		t.Error("the original alert was modified")
 	}
-	if len(recs[1].Alert.Events) != 3 {
-		t.Error("the recent alert was trimmed")
+	if len(recs[1].Alert.Events) != 3 || len(recs[3].Alert.Events) != 2 {
+		t.Error("an alert with a recent event was trimmed")
+	}
+	if len(recs[2].Alert.Events) != 1 {
+		t.Error("the alert raised late about old events was not trimmed")
 	}
 	if h.byID["old"].alert != recs[0].Alert {
 		t.Error("byID not updated")

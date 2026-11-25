@@ -38,7 +38,7 @@ type input struct {
 	parser parser.Parser
 	typ    string // source type in the configuration
 
-	lines, unparsed, excluded atomic.Int64
+	lines, unparsed, excluded, old atomic.Int64
 }
 
 type Engine struct {
@@ -57,9 +57,10 @@ type Engine struct {
 	// alerts raised are kept (from max_lifetime, DefaultMaxLifetime if not
 	// set). Run flushes them periodically.
 	MaxLifetime time.Duration
-	// LogTTL is how long the log lines counted by the rules and those of
-	// the alerts are kept (from log_ttl, DefaultLogTTL if not set). Run
-	// trims them periodically.
+	// LogTTL is how old a log line can be, by its time in the log (from
+	// log_ttl, DefaultLogTTL if not set): an older line is discarded when
+	// read, and Run trims periodically the log lines counted by the rules
+	// and those of the alerts once older.
 	LogTTL time.Duration
 	// memory keeps the memory used under the quota of memory_limit (nil:
 	// no limit).
@@ -260,9 +261,9 @@ func (e *Engine) expireData(cutoff time.Time) int {
 	return e.detector.Expire(cutoff) + e.history.expire(cutoff)
 }
 
-// trim forgets the log lines memorized before cutoff: the events counted by
-// the rules keep their time, the alerts their last event. It returns how
-// many log lines were forgotten.
+// trim forgets the log lines whose time (from the log) is before cutoff:
+// the events counted by the rules keep their time, the alerts their last
+// event. It returns how many log lines were forgotten.
 func (e *Engine) trim(cutoff time.Time) int {
 	n := e.detector.Trim(cutoff) + e.history.trim(cutoff)
 	if n > 0 {
@@ -546,6 +547,13 @@ func (e *Engine) Run(ctx context.Context) error {
 		if it.ev == nil {
 			return
 		}
+		// A line older than the log TTL, by its time in the log (a file
+		// read late, an archive...), is discarded.
+		if it.ev.Timestamp.Before(time.Now().Add(-ttl)) {
+			it.in.old.Add(1)
+			e.stats.Old(it.in.source.Name())
+			return
+		}
 		nEvents++
 		ev := e.process(ctx, it.ev)
 		if ev == nil {
@@ -612,6 +620,9 @@ loop:
 		msg := fmt.Sprintf("source %s: %d lines, %d unparsed", in.source.Name(), in.lines.Load(), in.unparsed.Load())
 		if n := in.excluded.Load(); n > 0 {
 			msg += fmt.Sprintf(", %d excluded", n)
+		}
+		if n := in.old.Load(); n > 0 {
+			msg += fmt.Sprintf(", %d older than log_ttl (%s) discarded", n, ttl)
 		}
 		log.Print(msg)
 	}

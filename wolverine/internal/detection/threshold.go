@@ -211,18 +211,16 @@ func (r *ThresholdRule) Expire(cutoff time.Time) int {
 	return n
 }
 
-// Trim forgets the log lines (the events) memorized before cutoff (wall
-// clock), keeping their times, and returns how many were forgotten.
+// Trim forgets the log lines (the events) whose time, from the log, is
+// before cutoff, keeping their times, and returns how many were forgotten.
 func (r *ThresholdRule) Trim(cutoff time.Time) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	n := 0
 	for _, mems := range r.groups {
+		// Not always in time order (events out of order): all are checked.
 		for i := range mems {
-			if !mems[i].at.Before(cutoff) {
-				break // memorized in order
-			}
-			if mems[i].ev != nil {
+			if mems[i].ev != nil && mems[i].ts.Before(cutoff) {
 				mems[i].ev = nil
 				n++
 			}

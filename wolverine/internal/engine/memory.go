@@ -20,10 +20,10 @@ import (
 )
 
 // The memory limit: when wolverine uses more than its quota (a percentage
-// of the memory of the machine, or of its cgroup if lower), the least
-// recently memorized data is forgotten until it uses less than freeTarget of
-// the quota: the log lines first (from the oldest to the most recent, as
-// Trim does), then, if that is not enough, the events counted by the rules
+// of the memory of the machine, or of its cgroup if lower), the oldest data
+// is forgotten until it uses less than freeTarget of the quota: the log
+// lines first (from the oldest to the most recent, by their time in the log,
+// as Trim does), then, if that is not enough, the events counted by the rules
 // and the alerts (as Expire does). The quota is also given to the Go runtime
 // as its soft memory limit, so that the garbage collector works harder as
 // it gets closer.

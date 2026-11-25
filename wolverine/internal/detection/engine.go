@@ -39,8 +39,8 @@ func (e *Engine) Expire(cutoff time.Time) int {
 	return n
 }
 
-// Trim makes every rule forget the log lines memorized before cutoff, and
-// returns how many were forgotten.
+// Trim makes every rule forget the log lines whose time (from the log) is
+// before cutoff, and returns how many were forgotten.
 func (e *Engine) Trim(cutoff time.Time) int {
 	n := 0
 	for _, r := range e.Rules {

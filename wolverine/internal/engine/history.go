@@ -117,16 +117,17 @@ func (h *history) expire(cutoff time.Time) int {
 	return i
 }
 
-// trim keeps only the last event of the alerts memorized before cutoff, and
-// returns how many events were forgotten. The alerts are replaced by copies:
-// they may be in use.
+// trim keeps only the last event of the alerts whose events are all before
+// cutoff (their time, from the log), and returns how many events were
+// forgotten. The alerts are replaced by copies: they may be in use.
 func (h *history) trim(cutoff time.Time) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	n := 0
 	for _, r := range h.alerts {
-		if !r.at.Before(cutoff) {
-			break // in the order they were raised
+		// Not in time order: a log read late gives older alerts.
+		if _, end := r.alert.EventRange(); !end.Before(cutoff) {
+			continue
 		}
 		if t := r.alert.Trimmed(); t != r.alert {
 			n += len(r.alert.Events) - len(t.Events)

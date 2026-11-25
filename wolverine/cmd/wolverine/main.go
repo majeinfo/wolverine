@@ -16,9 +16,10 @@
 // how long the data memorized by the rules and the alerts raised are kept.
 //
 // -log-ttl DURATION overrides the log_ttl of the configuration (default 1h):
-// how long the log lines are kept in memory (and in the state file). After
-// it, an event counted by a rule keeps only its time, and an alert only its
-// last event.
+// how old a log line can be, by its time in the log. An older line is
+// discarded when read; once older, an event counted by a rule keeps only
+// its time, and an alert only its last event (in memory and in the state
+// file).
 //
 // -memory-limit PERCENT overrides the memory_limit of the configuration
 // (default 60): the percentage of the memory (of the machine, or of the
@@ -58,7 +59,7 @@ func main() {
 	eventsPath := flag.String("events", "", "append every parsed event as a JSON line to this `file` (\"-\": stdout)")
 	detailedEvents := flag.Bool("detailed-events", false, "include in the alerts written to stdout the events (log lines) that raised them")
 	maxLifetime := flag.Duration("max-lifetime", 0, "how long the data memorized by the rules (events counted, suppressions) and the alerts raised are kept, e.g. 12h, overriding max_lifetime (default 24h)")
-	logTTL := flag.Duration("log-ttl", 0, "how long the log lines are kept in memory and in the state file, e.g. 30m, overriding log_ttl (default 1h); after it, an event counted keeps only its time and an alert its last event")
+	logTTL := flag.Duration("log-ttl", 0, "how old a log line can be, by its time in the log, e.g. 30m, overriding log_ttl (default 1h): older lines are discarded when read; once older, an event counted keeps only its time and an alert its last event")
 	memoryLimit := flag.Int("memory-limit", -1, "`percentage` of the memory (of the machine, or of the cgroup if lower) wolverine may use, overriding memory_limit (default 60); above it, the oldest log lines, then events and alerts, are forgotten. 0: no limit")
 	httpAddr := flag.String("http", "", "`address` of the web server (REST API and dashboard), e.g. 127.0.0.1:8080, overriding http.listen (\"none\": no web server)")
 	minimalEvents := flag.Bool("minimal-events", false, "include in the alerts written to stdout the last event (log line) that raised them")
