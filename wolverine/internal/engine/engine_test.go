@@ -359,6 +359,57 @@ func TestRunRuleMatchIf(t *testing.T) {
 	}
 }
 
+// A simple rule raises an alert for every event that matches, next to a
+// threshold rule that counts them.
+func TestRunSimpleRule(t *testing.T) {
+	dir := t.TempDir()
+	web := filepath.Join(dir, "access.log")
+	os.WriteFile(web, []byte(strings.Join([]string{
+		"203.0.113.7 200 2.5", "203.0.113.7 200 0.1", "198.51.100.4 500 3.0", "192.0.2.9 200 -",
+	}, "\n")+"\n"), 0o644)
+	src := logfile(web)
+	src.ID = "web"
+	src.Regexp = `^(?P<source_ip>\S+) (?P<status>\d+) (?P<request_time>\S+)$`
+	cfg := &config.Config{
+		Sources: []config.Source{src},
+		Rules: []config.Rule{
+			{ID: "slow", Type: "simple", Description: "Slow request", Severity: "medium",
+				Match: config.Match{MatchIf: `request_time != "-" && double(request_time) > 2.0`}},
+			{ID: "errors", Type: "simple", Match: config.Match{Status: "500"}},
+			{ID: "count", Type: "threshold", GroupBy: "SourceIP", Count: 2, Window: time.Hour},
+		},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	eng.Alerts = &out
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	dec := json.NewDecoder(&out)
+	for dec.More() {
+		var a event.Alert
+		if err := dec.Decode(&a); err != nil {
+			t.Fatal(err)
+		}
+		if a.RuleID == "count" { // the lines have no time: "within" varies
+			a.Message = fmt.Sprint(a.Metadata["value"])
+		}
+		got = append(got, a.RuleID+" "+a.Message)
+	}
+	sort.Strings(got)
+	want := "count 203.0.113.7|errors 198.51.100.4 500 3.0|slow Slow request: 198.51.100.4 500 3.0|slow Slow request: 203.0.113.7 200 2.5"
+	if strings.Join(got, "|") != want {
+		t.Errorf("alerts:\n%s\nwant\n%s", strings.Join(got, "|"), want)
+	}
+	if r := eng.stats.Total().Rules; r["slow"].Matches != 2 || r["slow"].Alerts != 2 || r["errors"].Alerts != 1 {
+		t.Errorf("stats: slow %+v, errors %+v", r["slow"], r["errors"])
+	}
+}
+
 func TestBuildExcludeErrors(t *testing.T) {
 	cfg := &config.Config{
 		Sources:      []config.Source{logfile("/var/log/messages")},

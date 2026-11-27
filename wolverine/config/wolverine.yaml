@@ -359,3 +359,15 @@ rules:
     # of every source). Other rules still see them.
     # exclude_if: username == "deploy" && in_list(source_ip, "trusted")
     actions: [email-admin, block-ip, webhook, slack]
+
+  # A simple rule raises an alert for every event that matches: no group_by,
+  # count, window or suppress. Here, every successful root login.
+  - id: root-login
+    type: simple
+    description: Root logged in
+    severity: medium
+    disabled: true
+    match:
+      service: sshd
+      match_if: message.matches("^Accepted \\S+ for root ")
+    actions: [email-admin]

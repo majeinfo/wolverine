@@ -576,8 +576,14 @@ rules:
     actions: [email-admin, block-ip, slack]
 ```
 
-`threshold` is the only rule type. It raises an alert when `count` matching
-events with the same `group_by` value occur within `window`:
+There are two rule types:
+
+- **`threshold`** raises an alert when `count` matching events with the
+  same `group_by` value occur within `window`.
+- **`simple`** raises an alert for every event that matches (see
+  [simple rules](#simple-rules)).
+
+A `threshold` rule has:
 
 - **`match`**: every condition given must hold. `category`, `service`,
   `action` and `status` must be equal to the event's. `has_fields` lists
@@ -608,6 +614,37 @@ The example rule only counts `Failed <method> for ...` messages, which are
 the ones with an `auth_method`. sshd also logs `Invalid user` and pam_unix
 lines for the same attempt, and counting those would count each attempt two
 or three times.
+
+#### Simple rules
+
+```yaml
+rules:
+  - id: slow-request
+    type: simple
+    description: Slow request
+    severity: medium
+    match:
+      service: nginx
+      match_if: request_time != "-" && double(request_time) > 2.0
+    exclude: [trusted]
+    actions: [slack]
+```
+
+A `simple` rule raises an alert for every event that matches its `match`
+(including `match_if`), unless its `exclude` lists or `exclude_if` drop it.
+It has no `group_by`, `count`, `window` or `suppress`: wolverine refuses
+them. It memorizes nothing.
+
+- **The alert** carries its event; its message is the description and the
+  event's message (or its log line), e.g. `Slow request: GET /report took
+  3.2s`. Its `Metadata` has `count: 1` and no `value`.
+- **No suppression:** a burst of matching lines gives a burst of alerts,
+  each running the actions. Make the match narrow, or use a `threshold`
+  rule with `count: 1` and a `suppress` to raise one alert per `group_by`
+  value and period.
+- **Undo:** an undo is postponed when the same thing is done again: for a
+  simple rule, an action for the same source IP. An alert without a source
+  IP has its own undo.
 
 Alerts are written to stdout as JSON:
 

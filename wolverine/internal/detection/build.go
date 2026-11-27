@@ -82,10 +82,25 @@ func buildRule(c config.Rule, conds Conditions) (Rule, error) {
 			Suppress:    c.Suppress,
 			Signature:   Signature(c),
 		}, nil
+	case "simple":
+		// An alert for every event that matches: nothing to count.
+		for name, set := range map[string]bool{
+			"group_by": c.GroupBy != "", "count": c.Count != 0, "window": c.Window != 0, "suppress": c.Suppress != 0,
+		} {
+			if set {
+				return nil, fmt.Errorf("%s: not used by a simple rule (it raises an alert for every event that matches)", name)
+			}
+		}
+		return &SimpleRule{
+			RuleID:      c.ID,
+			Description: c.Description,
+			Severity:    c.Severity,
+			Match:       match,
+		}, nil
 	case "":
 		return nil, fmt.Errorf("missing type")
 	default:
-		return nil, fmt.Errorf("unknown type %q", c.Type)
+		return nil, fmt.Errorf("unknown type %q (threshold or simple)", c.Type)
 	}
 }
 

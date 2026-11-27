@@ -3,6 +3,7 @@ package action
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -292,6 +293,29 @@ func (b *blocking) Execute(context.Context, *event.Alert) error {
 
 // An undo keeps only the last event of its alert: what the undo actions
 // use, rather than every log line until it runs.
+// The alerts of a simple rule have no group_by value: their undos are
+// told apart by the source IP of their event, or else by alert.
+func TestSchedulerUndoTarget(t *testing.T) {
+	s := NewScheduler(map[string]*Undo{"block": {After: time.Hour, Actions: []string{"unblock"}}}, map[string]Action{"unblock": &fake{id: "unblock"}})
+	simple := func(id, ip string) *event.Alert {
+		return &event.Alert{ID: id, RuleID: "s", Metadata: map[string]any{"count": 1}, Events: []*event.Event{{SourceIP: ip}}}
+	}
+	s.Schedule("block", simple("a1", "192.0.2.1"))
+	s.Schedule("block", simple("a2", "192.0.2.2")) // another address: its own undo
+	s.Schedule("block", simple("a3", "192.0.2.1")) // the same one: postponed
+	s.Schedule("block", simple("a4", ""))
+	s.Schedule("block", simple("a5", ""))
+	p, _ := s.Pending()
+	var ids []string
+	for _, u := range p {
+		ids = append(ids, u.Alert.ID)
+	}
+	slices.Sort(ids)
+	if got := strings.Join(ids, ","); got != "a2,a3,a4,a5" {
+		t.Errorf("pending undos: %s, want a2,a3,a4,a5", got)
+	}
+}
+
 func TestSchedulerKeepsTheLastEvent(t *testing.T) {
 	s := NewScheduler(map[string]*Undo{"block": {After: time.Hour, Actions: []string{"unblock"}}}, map[string]Action{"unblock": &fake{id: "unblock"}})
 	a := &event.Alert{ID: "a1", RuleID: "ssh", Metadata: map[string]any{"value": "192.0.2.1", "count": 3},

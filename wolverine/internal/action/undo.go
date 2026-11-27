@@ -144,7 +144,7 @@ func (s *Scheduler) Schedule(actionID string, a *event.Alert) {
 	}
 	u := s.undos[actionID]
 	p := &Pending{
-		Key:     fmt.Sprintf("%s\x00%s\x00%v", actionID, a.RuleID, a.Metadata["value"]),
+		Key:     fmt.Sprintf("%s\x00%s\x00%s", actionID, a.RuleID, undoTarget(a)),
 		Action:  actionID,
 		Actions: slices.Clone(u.Actions),
 		Due:     s.now().Add(u.After),
@@ -170,6 +170,20 @@ func (s *Scheduler) Schedule(actionID string, a *event.Alert) {
 	}
 	verbose.Infof("action %s: undo (%s) %s at %s for alert %s (%s)", actionID, strings.Join(u.Actions, ", "), what, p.Due.Format(time.DateTime), a.ID, a.RuleID)
 	s.signal()
+}
+
+// undoTarget identifies what an action did, so that doing it again
+// postpones its undo: the group_by value of a threshold alert; for an alert
+// without one (simple rule), the source IP of its event, or else the alert
+// itself (its undo is never postponed by another alert).
+func undoTarget(a *event.Alert) string {
+	if v, ok := a.Metadata["value"]; ok {
+		return fmt.Sprint(v)
+	}
+	if n := len(a.Events); n > 0 && a.Events[n-1].SourceIP != "" {
+		return "ip=" + a.Events[n-1].SourceIP
+	}
+	return "alert=" + a.ID
 }
 
 // report tells s.Report what happened to an undo action of alert a.

@@ -95,9 +95,14 @@ func describe(cfg *config.Config) {
 			verbose.Infof("rule %s: disabled", r.ID)
 			continue
 		}
-		verbose.Infof("rule %s: %s, %d events per %s within %s (suppress: %s), exclude: %s, actions: %s",
-			r.ID, r.Type, r.Count, r.GroupBy, r.Window, r.Suppress,
-			or(strings.Join(r.Exclude, ", "), "none"), or(strings.Join(r.Actions, ", "), "none"))
+		if r.Type == "simple" {
+			verbose.Infof("rule %s: simple, an alert for every event that matches, exclude: %s, actions: %s",
+				r.ID, or(strings.Join(r.Exclude, ", "), "none"), or(strings.Join(r.Actions, ", "), "none"))
+		} else {
+			verbose.Infof("rule %s: %s, %d events per %s within %s (suppress: %s), exclude: %s, actions: %s",
+				r.ID, r.Type, r.Count, r.GroupBy, r.Window, r.Suppress,
+				or(strings.Join(r.Exclude, ", "), "none"), or(strings.Join(r.Actions, ", "), "none"))
+		}
 		if r.Match.MatchIf != "" {
 			verbose.Infof("rule %s: match_if: %s", r.ID, r.Match.MatchIf)
 		}

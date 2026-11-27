@@ -437,7 +437,7 @@ func (e *Engine) restoreRules(cutoff time.Time) {
 		n, err := r.Restore(data, cutoff)
 		switch {
 		case errors.Is(err, detection.ErrRuleChanged):
-			verbose.Infof("rule %s: saved data ignored: the rule changed (match, exclude, exclude_if or group_by)", r.ID())
+			verbose.Infof("rule %s: saved data ignored: the rule changed (type, match, exclude, exclude_if or group_by)", r.ID())
 		case err != nil:
 			// Better start without the data than not start.
 			log.Printf("state file %s: rule %s: %v (data ignored)", e.state.Path(), r.ID(), err)
