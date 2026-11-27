@@ -291,6 +291,17 @@ actions:
       operation: remove
     aws: ${waf_aws}
 
+  # Append the alerts to a file: as JSON lines (format: json, the default)
+  # or as text (a line per alert, then its log lines). The file is opened
+  # for each alert, so it can be rotated by logrotate.
+  - id: alerts-file
+    type: file
+    disabled: true
+    file:
+      path: /var/log/wolverine/alerts.json
+      format: json
+    max_events: 5          # log lines per alert (default: all)
+
   # POST the alert as JSON (as on stdout with -detailed-events, at most
   # max_events events) to an HTTP endpoint.
   # Network errors, 429 and 5xx are retried with an exponential backoff.

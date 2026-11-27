@@ -157,6 +157,8 @@ func actionTarget(a config.Action) string {
 		}
 		return fmt.Sprintf("%s %s of the last event %s WAF IP set %s (%s%s)", op, or(a.IPSet.Field, "SourceIP"),
 			map[bool]string{true: "to", false: "from"}[op == "add"], set, or(a.IPSet.Scope, "REGIONAL"), prefixed(", ", a.AWS.Region))
+	case "file":
+		return fmt.Sprintf("to %s (%s)", a.File.Path, or(a.File.Format, "json"))
 	case "webhook":
 		if a.Webhook.URLEnv != "" {
 			return "to the URL in $" + a.Webhook.URLEnv

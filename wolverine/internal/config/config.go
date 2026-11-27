@@ -200,6 +200,9 @@ type Action struct {
 	// webhook
 	Webhook Webhook `yaml:"webhook"`
 
+	// file
+	File FileAction `yaml:"file"`
+
 	// aws-waf-ipset: the IP set, and the credentials and region, as for an
 	// aws-s3 source.
 	IPSet WAFIPSet `yaml:"ipset"`
@@ -208,6 +211,13 @@ type Action struct {
 	// Undo runs other actions some time after this one succeeded, e.g. to
 	// unblock an IP address blocked by this action.
 	Undo *Undo `yaml:"undo"`
+}
+
+// FileAction is the file to which a file action appends the alerts.
+type FileAction struct {
+	Path string `yaml:"path"`
+	// Format is json (default: one alert per line) or text.
+	Format string `yaml:"format"`
 }
 
 // Undo tells which actions undo an action, and when.

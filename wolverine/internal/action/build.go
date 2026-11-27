@@ -15,6 +15,7 @@ import (
 
 	"wolverine/internal/action/awswaf"
 	"wolverine/internal/action/email"
+	"wolverine/internal/action/file"
 	"wolverine/internal/action/ssh"
 	"wolverine/internal/action/webhook"
 	"wolverine/internal/awsconf"
@@ -56,11 +57,35 @@ func build(c config.Action) (Action, error) {
 		return buildWebhook(c)
 	case "aws-waf-ipset":
 		return buildWAFIPSet(c)
+	case "file":
+		return buildFile(c)
 	case "":
 		return nil, fmt.Errorf("missing type")
 	default:
-		return nil, fmt.Errorf("unknown type %q", c.Type)
+		return nil, fmt.Errorf("unknown type %q (email, ssh, webhook, aws-waf-ipset or file)", c.Type)
 	}
+}
+
+func buildFile(c config.Action) (Action, error) {
+	if c.File.Path == "" {
+		return nil, fmt.Errorf("file.path is required")
+	}
+	format := c.File.Format
+	switch format {
+	case "":
+		format = file.JSON
+	case file.JSON, file.Text:
+	default:
+		return nil, fmt.Errorf("file.format %q: json or text", format)
+	}
+	if c.MaxEvents < 0 {
+		return nil, fmt.Errorf("max_events must not be negative")
+	}
+	f := &file.File{ID: c.ID, Path: c.File.Path, Format: format, MaxEvents: c.MaxEvents}
+	if err := f.Check(); err != nil {
+		return nil, fmt.Errorf("file.path: %w", err)
+	}
+	return f, nil
 }
 
 func buildEmail(c config.Action) (Action, error) {

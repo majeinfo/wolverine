@@ -2,13 +2,16 @@
 
 Wolverine reads logs, turns each line into an event, finds suspicious
 patterns and reacts to them: it sends an email, runs a command over ssh
-(e.g. to block an IP on a firewall) or calls a webhook (Slack...).
+(e.g. to block an IP on a firewall), calls a webhook (Slack...) or writes
+the alert to a file.
 
 ```
 sources ──> parser ──> enrichment ──> exclude lists ──> detection rules ──> actions
 logfile     regexp     sshd: user,    source IP in      threshold:          email
 journal     journal    IP, method...  trusted lists?    N events per IP     ssh command
 aws-s3                                                  within a window     webhook / Slack
+                                                        simple:             AWS WAF, file
+                                                        every match
 ```
 
 Out of the box it detects SSH brute force: 5 failed logins from the same IP
@@ -904,6 +907,42 @@ For a custom body such as a Slack message, write a `body` template:
 - **Startup check:** wolverine renders the template with sample values when
   it starts and refuses an invalid JSON result.
 
+#### `file`: append the alerts to a file
+
+```yaml
+- id: alerts-file
+  type: file
+  file:
+    path: /var/log/wolverine/alerts.json
+    format: json              # default; or text
+  max_events: 5               # log lines per alert (default: all)
+```
+
+- **`json`:** one alert per line (JSON Lines), as on stdout with
+  `-detailed-events`: easy to read with `jq` or to ship to a SIEM. With
+  `max_events`, the alert has at most that many events and
+  `Metadata.events_total` gives how many it had.
+
+  ```json
+  {"ID":"9f3c…","RuleID":"ssh-failed-logins-per-ip","Timestamp":"2026-11-27T10:00:05+01:00","Start":"…","End":"…","Severity":"high","Message":"…: 5 events for SourceIP=203.0.113.7 within 1m12s","Events":[…],"Metadata":{"count":5,"value":"203.0.113.7",…}}
+  ```
+- **`text`:** a line per alert (event time, severity, rule, message,
+  alert id), then its log lines, indented:
+
+  ```
+  2026-11-27T10:00:05+01:00 [HIGH] ssh-failed-logins-per-ip: Repeated failed SSH logins from the same IP: 5 events for SourceIP=203.0.113.7 within 1m12s (alert 9f3c…)
+      Nov 27 09:58:53 web1 sshd[812]: Failed password for root from 203.0.113.7 port 52214 ssh2
+      ...
+  ```
+
+  The control characters of the logs (line breaks, terminal escape
+  sequences) are replaced by spaces: a crafted log line cannot add a fake
+  alert to the file.
+- **The file** is created if needed (mode `0640`), and wolverine refuses to
+  start if it cannot write to it. Each alert is appended in one write.
+- **Rotation:** the file is opened for each alert, so logrotate can rename
+  it (no need for `copytruncate`); the next alert creates a new one.
+
 ### Exclude lists
 
 ```yaml
@@ -1500,8 +1539,8 @@ internal/
   parser/                 Parser interface, event field helpers
   processor/enrichment/   sshd enrichment
   processor/filter/       exclude lists
-  detection/              rules (threshold)
-  action/                 dispatcher, undo scheduler, email, ssh, webhook, awswaf
+  detection/              rules (threshold, simple)
+  action/                 dispatcher, undo scheduler, email, ssh, webhook, awswaf, file
   awsconf/                AWS credentials and region (aws-s3, aws-waf-ipset)
   state/                  state file (positions, rule data, alerts, undos)
   stats/                  counters by minute

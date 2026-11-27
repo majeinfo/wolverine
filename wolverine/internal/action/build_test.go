@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"wolverine/internal/action/awswaf"
+	"wolverine/internal/action/file"
 	"wolverine/internal/action/webhook"
 	"wolverine/internal/config"
 	"wolverine/internal/event"
@@ -289,5 +290,32 @@ func TestBuildWAFIPSetProfile(t *testing.T) {
 	}
 	if w := a.(*awswaf.IPSet); w.Client == nil {
 		t.Fatal("no client")
+	}
+}
+
+func TestBuildFile(t *testing.T) {
+	dir := t.TempDir()
+	ok := config.Action{ID: "f", Type: "file", File: config.FileAction{Path: filepath.Join(dir, "alerts.log")}}
+	acts, err := Build([]config.Action{ok})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, isFile := acts["f"].(*file.File); !isFile || f.Format != file.JSON {
+		t.Errorf("action: %+v", acts["f"])
+	}
+	if _, err := os.Stat(ok.File.Path); err != nil {
+		t.Errorf("the file is created at startup: %v", err)
+	}
+	for want, mod := range map[string]func(*config.Action){
+		"file.path is required":           func(a *config.Action) { a.File.Path = "" },
+		`file.format "xml": json or text`: func(a *config.Action) { a.File.Format = "xml" },
+		"max_events must not be negative": func(a *config.Action) { a.MaxEvents = -1 },
+		"file.path: open":                 func(a *config.Action) { a.File.Path = filepath.Join(dir, "nope", "alerts.log") },
+	} {
+		a := ok
+		mod(&a)
+		if _, err := Build([]config.Action{a}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: got %v", want, err)
+		}
 	}
 }
