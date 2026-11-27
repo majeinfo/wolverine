@@ -73,7 +73,8 @@ var reserved = []string{
 const maxLoggedConditionErrors = 10
 
 // Condition is a CEL expression evaluated on an event: a source drops the
-// events for which its exclude_if condition is true, a rule ignores them.
+// events for which its exclude_if condition is true, a rule ignores them;
+// a rule only matches the events for which its match_if condition is true.
 type Condition struct {
 	Text string
 	// Owner names the source or rule of the condition in the logs, e.g.
@@ -153,18 +154,36 @@ func CompileCondition(text string, groups []string, lists map[string]*List) (*Co
 func (c *Condition) Excludes(ev *event.Event) bool {
 	match, err := c.Match(ev)
 	if err != nil {
-		switch n := c.errors.Add(1); {
-		case n <= maxLoggedConditionErrors || verbose.Level >= 2:
-			log.Printf("%s: exclude_if: %v (event kept: %q)", c.Owner, err, ev.Raw)
-		case n == maxLoggedConditionErrors+1:
-			log.Printf("%s: exclude_if: more errors, not logged (use -v -v to see them all)", c.Owner)
-		}
+		c.logError("exclude_if", err, "event kept", ev)
 		return false
 	}
 	if match {
 		verbose.Debugf("%s: exclude_if is true for an event from %s", c.Owner, ev.Source)
 	}
 	return match
+}
+
+// Selects tells whether the condition of a match_if is true for an event.
+// An evaluation error (e.g. double("-")) does not match the event: better
+// no alert than one raised by mistake; it is logged.
+func (c *Condition) Selects(ev *event.Event) bool {
+	match, err := c.Match(ev)
+	if err != nil {
+		c.logError("match_if", err, "event not matched", ev)
+		return false
+	}
+	return match
+}
+
+// logError logs an evaluation error: the first maxLoggedConditionErrors of
+// the condition, all of them with -v -v.
+func (c *Condition) logError(kind string, err error, outcome string, ev *event.Event) {
+	switch n := c.errors.Add(1); {
+	case n <= maxLoggedConditionErrors || verbose.Level >= 2:
+		log.Printf("%s: %s: %v (%s: %q)", c.Owner, kind, err, outcome, ev.Raw)
+	case n == maxLoggedConditionErrors+1:
+		log.Printf("%s: %s: more errors, not logged (use -v -v to see them all)", c.Owner, kind)
+	}
 }
 
 // Match evaluates the condition on an event.

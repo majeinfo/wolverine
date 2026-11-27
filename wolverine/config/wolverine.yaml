@@ -345,6 +345,10 @@ rules:
       #action: login
       #status: failure
       #has_fields: [auth_method]
+      # Only the events for which this CEL expression is true match (same
+      # variables as exclude_if below). The regexp groups are strings:
+      # compare numbers after double(), e.g. for slow web requests:
+      #match_if: request_time != "-" && double(request_time) > 2.0
     group_by: SourceIP   # Event field name, or a key of Event.Fields
     count: 3
     window: 5m

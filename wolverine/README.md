@@ -581,7 +581,9 @@ events with the same `group_by` value occur within `window`:
 
 - **`match`**: every condition given must hold. `category`, `service`,
   `action` and `status` must be equal to the event's. `has_fields` lists
-  `Fields` keys that must be present.
+  `Fields` keys that must be present. `match_if` is a
+  [condition](#exclude_if-conditions): only the events for which it is
+  true match.
 - **`group_by`**: an event field (`SourceIP`, `Username`, `Hostname`,
   `Service`, `Source`...) or a key of `Fields`. Events without a value are
   ignored.
@@ -934,14 +936,40 @@ your admin workstations, monitoring hosts, gateways...
 
 ### `exclude_if` conditions
 
-`exclude_if` is an expression in [CEL](https://cel.dev) (Common Expression
-Language), on a source or a rule:
+`exclude_if` and `match_if` are expressions in [CEL](https://cel.dev)
+(Common Expression Language):
 
-- **Source:** the events of the source for which it is true are dropped,
-  like those of its `exclude` lists. No rule sees them.
-- **Rule:** the rule ignores the events for which it is true, like those of
-  its `exclude` lists. Other rules still see them. The condition is only
-  evaluated for the events that match the rule otherwise.
+- **Source `exclude_if`:** the events of the source for which it is true
+  are dropped, like those of its `exclude` lists. No rule sees them.
+- **Rule `exclude_if`:** the rule ignores the events for which it is true,
+  like those of its `exclude` lists. Other rules still see them. The
+  condition is only evaluated for the events that match the rule otherwise.
+- **Rule `match_if`**, in `match`: the rule only counts the events for
+  which it is true. It is evaluated after the other `match` criteria and the
+  `exclude` lists, before `exclude_if`.
+
+For example, an alert when an address makes 5 requests of more than 2
+seconds within 10 minutes (nginx with `$request_time` at the end of its log
+format):
+
+```yaml
+sources:
+  - id: nginx
+    regexp: '^(?P<source_ip>\S+) .* (?P<status>\d{3}) \S+ "[^"]*" "[^"]*" (?P<request_time>\S+)$'
+    ...
+
+rules:
+  - id: slow-requests
+    type: threshold
+    match:
+      match_if: request_time != "-" && double(request_time) > 2.0
+    group_by: SourceIP
+    count: 5
+    window: 10m
+```
+
+The regexp groups are strings: convert them with `double()` (or `int()`)
+to compare numbers, `request_time > 2` is refused at startup.
 
 ```yaml
 sources:
@@ -987,9 +1015,11 @@ rules:
   an error: `status` is a string), regular expressions, and the lists
   named in `in_list`, which must be written in quotes. The expression must
   return `true` or `false`.
-- **Errors while running** (a missing key of `fields`...) keep the event:
-  wolverine would rather analyze an event too many. The first 10 errors of
-  each condition are logged, all of them with `-v -v`.
+- **Errors while running** (a missing key of `fields`, `double("-")`...):
+  `exclude_if` keeps the event, as wolverine would rather analyze an event
+  too many; `match_if` does not match it, as it would rather not raise an
+  alert by mistake. The first 10 errors of each condition are logged, all of
+  them with `-v -v`: test the values first (`request_time != "-" && ...`).
 - **YAML:** write the expression after `>-` to split it over several lines,
   or in single quotes on one line.
 

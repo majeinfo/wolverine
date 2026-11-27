@@ -308,6 +308,9 @@ type Match struct {
 	Action    string   `yaml:"action"`
 	Status    string   `yaml:"status"`
 	HasFields []string `yaml:"has_fields"`
+	// MatchIf is a CEL expression: only the events for which it is true
+	// match (with the other criteria).
+	MatchIf string `yaml:"match_if" json:",omitempty"` // omitempty: the signature of the rules without it is unchanged
 }
 
 // Load reads the main configuration file, then the *.yaml and *.yml files of

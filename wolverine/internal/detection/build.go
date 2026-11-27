@@ -10,10 +10,15 @@ import (
 	"wolverine/internal/event"
 )
 
+// Conditions are the compiled CEL conditions of a rule.
+type Conditions struct {
+	MatchIf, ExcludeIf func(*event.Event) bool
+}
+
 // BuildRules creates the rules described in the configuration, skipping the
-// disabled ones. excludeIf holds the compiled exclude_if conditions, by rule
-// id.
-func BuildRules(cfgs []config.Rule, excludeIf map[string]func(*event.Event) bool) ([]Rule, error) {
+// disabled ones. conds holds the compiled match_if and exclude_if
+// conditions, by rule id.
+func BuildRules(cfgs []config.Rule, conds map[string]Conditions) ([]Rule, error) {
 	var rules []Rule
 	seen := map[string]bool{}
 	for i, c := range cfgs {
@@ -28,7 +33,7 @@ func BuildRules(cfgs []config.Rule, excludeIf map[string]func(*event.Event) bool
 			continue
 		}
 
-		r, err := buildRule(c, excludeIf[c.ID])
+		r, err := buildRule(c, conds[c.ID])
 		if err != nil {
 			return nil, fmt.Errorf("rule %q: %w", c.ID, err)
 		}
@@ -37,15 +42,19 @@ func BuildRules(cfgs []config.Rule, excludeIf map[string]func(*event.Event) bool
 	return rules, nil
 }
 
-func buildRule(c config.Rule, excludeIf func(*event.Event) bool) (Rule, error) {
+func buildRule(c config.Rule, conds Conditions) (Rule, error) {
+	if c.Match.MatchIf != "" && conds.MatchIf == nil {
+		return nil, fmt.Errorf("match_if: not compiled")
+	}
 	match := Match{
 		Category:  c.Match.Category,
 		Service:   c.Match.Service,
 		Action:    c.Match.Action,
 		Status:    c.Match.Status,
 		HasFields: c.Match.HasFields,
+		MatchIf:   conds.MatchIf,
 		Exclude:   c.Exclude,
-		ExcludeIf: excludeIf,
+		ExcludeIf: conds.ExcludeIf,
 	}
 
 	switch c.Type {

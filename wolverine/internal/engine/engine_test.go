@@ -323,6 +323,42 @@ func TestRunRuleExcludeIf(t *testing.T) {
 	}
 }
 
+// A rule's match_if keeps only the events for which it is true: here the
+// requests that took more than 2 seconds. A value it cannot evaluate ("-")
+// does not match.
+func TestRunRuleMatchIf(t *testing.T) {
+	dir := t.TempDir()
+	web := filepath.Join(dir, "access.log")
+	os.WriteFile(web, []byte(strings.Join([]string{
+		"203.0.113.7 200 2.5", "203.0.113.7 200 3.1", "203.0.113.7 500 10",
+		"198.51.100.4 200 0.2", "198.51.100.4 200 2.0", "198.51.100.4 200 5.0",
+		"192.0.2.9 200 -", "192.0.2.9 200 -", "192.0.2.9 200 -",
+	}, "\n")+"\n"), 0o644)
+	src := logfile(web)
+	src.ID = "web"
+	src.Regexp = `^(?P<source_ip>\S+) (?P<status>\d+) (?P<request_time>\S+)$`
+	cfg := &config.Config{
+		Sources: []config.Source{src},
+		Rules: []config.Rule{{ID: "slow", Type: "threshold", GroupBy: "SourceIP", Count: 3, Window: time.Hour,
+			Match: config.Match{MatchIf: `double(request_time) > 2.0`}}},
+	}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	eng.Alerts = &out
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out.String(), "\n"); n != 1 || !strings.Contains(out.String(), `"value":"203.0.113.7"`) {
+		t.Errorf("alerts:\n%s", out.String())
+	}
+	if m := eng.stats.Total().Rules["slow"].Matches; m != 4 {
+		t.Errorf("%d matches, want 4 (3 + 5.0)", m)
+	}
+}
+
 func TestBuildExcludeErrors(t *testing.T) {
 	cfg := &config.Config{
 		Sources:      []config.Source{logfile("/var/log/messages")},
@@ -345,6 +381,11 @@ func TestBuildExcludeErrors(t *testing.T) {
 	cfg.Rules = []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 1, Window: time.Minute, ExcludeIf: `nope == ""`}}
 	if _, err := New(cfg); err == nil || !strings.HasPrefix(err.Error(), `rule "r": exclude_if: `) || !strings.Contains(err.Error(), "undeclared reference to 'nope'") {
 		t.Errorf("rule exclude_if: got %v", err)
+	}
+	// The groups are strings: a number is compared after double().
+	cfg.Rules = []config.Rule{{ID: "r", Type: "threshold", GroupBy: "SourceIP", Count: 1, Window: time.Minute, Match: config.Match{MatchIf: `status > 2`}}}
+	if _, err := New(cfg); err == nil || !strings.HasPrefix(err.Error(), `rule "r": match_if: `) || !strings.Contains(err.Error(), "no matching overload") {
+		t.Errorf("rule match_if: got %v", err)
 	}
 	cfg.Rules = nil
 	for expr, want := range map[string]string{

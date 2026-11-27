@@ -349,10 +349,10 @@ func (e *Engine) recordAction(alertID string, run event.ActionRun) {
 }
 
 // buildExclude resolves the exclude lists, checks those the sources and
-// rules name, and compiles their exclude_if conditions. The processor only
-// checks the lists of the enabled ones. The rules' conditions are returned
-// by rule id.
-func buildExclude(cfg *config.Config) (*filter.Exclude, map[string]func(*event.Event) bool, error) {
+// rules name, and compiles their exclude_if conditions and the match_if of
+// the rules. The processor only checks the lists of the enabled ones. The
+// rules' conditions are returned by rule id.
+func buildExclude(cfg *config.Config) (*filter.Exclude, map[string]detection.Conditions, error) {
 	lists, err := filter.BuildLists(cfg.ExcludeLists)
 	if err != nil {
 		return nil, nil, err
@@ -388,15 +388,27 @@ func buildExclude(cfg *config.Config) (*filter.Exclude, map[string]func(*event.E
 		}
 	}
 	used := map[string]bool{}
-	ruleConditions := map[string]func(*event.Event) bool{}
+	ruleConditions := map[string]detection.Conditions{}
 	for _, r := range cfg.Rules {
+		var conds detection.Conditions
+		if r.Match.MatchIf != "" {
+			cond, err := filter.CompileCondition(r.Match.MatchIf, allGroups, lists)
+			if err != nil {
+				return nil, nil, fmt.Errorf("rule %q: match_if: %w", r.ID, err)
+			}
+			cond.Owner = fmt.Sprintf("rule %q", r.ID)
+			conds.MatchIf = cond.Selects
+		}
 		if r.ExcludeIf != "" {
 			cond, err := filter.CompileCondition(r.ExcludeIf, allGroups, lists)
 			if err != nil {
 				return nil, nil, fmt.Errorf("rule %q: exclude_if: %w", r.ID, err)
 			}
 			cond.Owner = fmt.Sprintf("rule %q", r.ID)
-			ruleConditions[r.ID] = cond.Excludes
+			conds.ExcludeIf = cond.Excludes
+		}
+		if conds.MatchIf != nil || conds.ExcludeIf != nil {
+			ruleConditions[r.ID] = conds
 		}
 		for _, id := range r.Exclude {
 			l, ok := lists[id]

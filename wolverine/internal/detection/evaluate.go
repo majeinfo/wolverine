@@ -17,6 +17,9 @@ type Match struct {
 	Status   string
 	// HasFields lists keys that must be present in Event.Fields.
 	HasFields []string
+	// MatchIf, if set, keeps only the events for which it returns true. It
+	// is called after the other criteria.
+	MatchIf func(*event.Event) bool
 	// Exclude lists the exclude lists whose events are ignored (see
 	// Event.ExcludedBy).
 	Exclude []string
@@ -47,6 +50,9 @@ func (m Match) Matches(ev *event.Event) bool {
 		if slices.Contains(m.Exclude, id) {
 			return false
 		}
+	}
+	if m.MatchIf != nil && !m.MatchIf(ev) {
+		return false
 	}
 	if m.ExcludeIf != nil && m.ExcludeIf(ev) {
 		return false
